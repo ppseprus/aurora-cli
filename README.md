@@ -69,6 +69,7 @@ sudo ln -s "$(pwd)/aurora.sh" /usr/local/bin/aurora
 #### Options
 
 - `--at <location>` — Specify location (alternative syntax)
+- `--hist` — Include historical K-index data (last ~48 hours)
 - `--help` — Show help message
 - `--explain` — Display detailed explanation of probability mapping
 
@@ -124,7 +125,7 @@ Kp indices use thirds ("tertiles") using whole numbers, and plus/minus symbols w
 1. NOAA's forecast data uses decimal values (eg. 5.33)
 2. To determine visibility, the script **rounds to the nearest whole number**:
    - **5.00–5.49** → rounds to **5** → aurora visible at 60°+ latitude
-   - **5.50–6.49** → rounds to **6** → aurora visible at 57°+ latitude  
+   - **5.50–6.49** → rounds to **6** → aurora visible at 57°+ latitude
    - **6.50–7.49** → rounds to **7** → aurora visible at 54°+ latitude
 
 

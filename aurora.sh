@@ -16,6 +16,8 @@ readonly NOAA_KP_FORECAST="https://services.swpc.noaa.gov/products/noaa-planetar
 readonly NOMINATIM="https://nominatim.openstreetmap.org/search"
 readonly USER_AGENT="aurora-cli/${SCRIPT_VERSION} (https://github.com/ppseprus/aurora-cli)"
 
+readonly HISTORICAL_ENTRIES=16  # Number of historical K-index entries to display when `--hist` is provided
+
 # Color codes (disabled if not in TTY)
 if [[ -t 1 ]]; then
   readonly COLOR_RESET='\033[0m'
@@ -48,11 +50,12 @@ $(echo -e "${COLOR_BOLD}Description:${COLOR_RESET}")
 
 $(echo -e "${COLOR_BOLD}Options:${COLOR_RESET}")
   --at <location>    Specify location (alternative syntax)
+  --hist             Include historical K-index data (last ~48 hours)
   --help             Show this help message
   --explain          Show detailed explanation of probability mapping
 
 $(echo -e "${COLOR_BOLD}Examples:${COLOR_RESET}")
-  ${SCRIPT_NAME} "Reykjavik, Iceland"
+  ${SCRIPT_NAME} "Stockholm, Sweden"
   ${SCRIPT_NAME} --at "Tromsø, Norway"
   ${SCRIPT_NAME} --explain
 EOF
@@ -136,6 +139,7 @@ check_dependencies() {
 # Parse command line arguments
 parse_args() {
   local location=""
+  local show_hist="false"
 
   # No arguments provided
   if [[ $# -eq 0 ]]; then
@@ -152,6 +156,10 @@ parse_args() {
       --explain)
         explain
         exit 0
+        ;;
+      --hist)
+        show_hist="true"
+        shift
         ;;
       --at)
         if [[ -z "${2:-}" ]]; then
@@ -182,7 +190,7 @@ parse_args() {
     exit 1
   fi
 
-  echo "$location"
+  echo "${location}|${show_hist}"
 }
 
 # Fetch geocoding data
@@ -227,9 +235,48 @@ display_forecast() {
   local lon="$2"
   local display_name="$3"
   local kp_json="$4"
+  local show_hist="${5:-false}"
   local utc_now
 
   utc_now=$(date -u +"%Y-%m-%d %H:%M")
+
+  # Process historical data if requested
+  local hist_data=""
+  if [[ "$show_hist" == "true" ]]; then
+    hist_data=$(echo "$kp_json" | jq -r --arg lat "$lat" --arg now "$utc_now" --argjson entries "$HISTORICAL_ENTRIES" '
+      .[1:]
+      | map({
+          time: .[0],
+          kp: (.[1] | tonumber)
+        })
+      | map(select(.time < $now))
+      | sort_by(.time)
+      | .[-$entries:]
+      | map(. + {
+          min_lat: (
+            (.kp | round) as $kp_int |
+            if $kp_int >= 9 then 48
+            elif $kp_int == 8 then 51
+            elif $kp_int == 7 then 54
+            elif $kp_int == 6 then 57
+            elif $kp_int == 5 then 60
+            elif $kp_int == 4 then 62
+            elif $kp_int == 3 then 64
+            elif $kp_int == 2 then 65
+            elif $kp_int == 1 then 66
+            else 67 end
+          )
+        })
+      | map(. + {
+          prob: (
+            (($lat | tonumber) - .min_lat) as $d
+            | if $d <= 0 then 0
+              else ( ($d * 20) | if . > 100 then 100 else . end )
+              end
+          )
+        })
+    ')
+  fi
 
   local table_data
   table_data=$(echo "$kp_json" | jq -r --arg lat "$lat" --arg now "$utc_now" '
@@ -277,6 +324,22 @@ display_forecast() {
   # Table
   {
     echo -e "Time_(UTC)\tKp\tMin_Latitude\tProbability\tOutlook"
+
+    # Display historical data if available
+    if [[ "$show_hist" == "true" && -n "$hist_data" ]]; then
+      echo "$hist_data" | jq -r '
+        .[] |
+        (if .prob == 0 then "None"
+         elif .prob <= 20 then "Low"
+         elif .prob <= 50 then "Fair"
+         elif .prob <= 75 then "Good"
+         else "Excellent" end) as $outlook |
+        "\(.time)\t\(.kp)\t≥\(.min_lat)°\t\(.prob | floor)%\t\($outlook)"
+      '
+      # Visual divider between historical and forecast data
+      echo -e "${COLOR_BOLD}━━━ FORECAST ━━━${COLOR_RESET}\t\t\t\t"
+    fi
+
     echo "$table_data" | jq -r '
       .[] |
       (if .prob == 0 then "None"
@@ -310,8 +373,9 @@ main() {
 
   check_dependencies
 
-  local location
-  location=$(parse_args "$@")
+  local parse_result location show_hist
+  parse_result=$(parse_args "$@")
+  IFS='|' read -r location show_hist <<< "$parse_result"
 
   local geo_data lat lon display_name
   geo_data=$(geocode_location "$location")
@@ -320,7 +384,7 @@ main() {
   local kp_json
   kp_json=$(fetch_kp_forecast)
 
-  display_forecast "$lat" "$lon" "$display_name" "$kp_json"
+  display_forecast "$lat" "$lon" "$display_name" "$kp_json" "$show_hist"
 }
 
 main "$@"
