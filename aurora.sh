@@ -8,8 +8,8 @@
 set -euo pipefail
 
 # Config
-readonly SCRIPT_NAME="aurora-cli"
-readonly SCRIPT_VERSION="0.1.0"
+SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_NAME
 
 readonly NOAA_KP_FORECAST="https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
 readonly NOMINATIM="https://nominatim.openstreetmap.org/search"
