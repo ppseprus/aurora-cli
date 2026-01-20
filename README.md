@@ -1,6 +1,6 @@
 # Aurora Forecast CLI
 
-A command-line tool that provides aurora visibility forecasts based on your location and NOAA's Planetary K-index data.
+A command-line tool that provides aurora visibility forecasts based on a given location and NOAA's Planetary K-index data.
 
 ## Overview
 
@@ -26,7 +26,7 @@ Aurora Forecast CLI retrieves latest geomagnetic forecast data from NOAA and cal
 
 #### macOS (w/ Homebrew)
 
-_Note: `curl` and `column` are generally available._
+_Note: `curl` and `column` are usually pre-installed._
 
 ```bash
 brew install jq
@@ -34,7 +34,7 @@ brew install jq
 
 #### Ubuntu/Debian
 
-_Note: `curl` and `column` are generally available._
+_Note: `curl` and `column` are usually pre-installed._
 
 ```bash
 sudo apt-get install jq curl
@@ -144,10 +144,13 @@ For each forecast period:
 
 #### Example
 
-- Location: Stockholm, Sweden (59.3°N)
-- Kp Index: 5 → Minimum latitude 60°
-- Calculation: 59.3° < 60° → **0% probability** (just below threshold)
-- If Kp = 6 (minimum 57°): 59.3° - 57° = 2.3° → 2.3 × 20 = **46% probability**
+Location: Stockholm, Sweden (59.3°N)
+
+| Kp | Min Latitude | Latitude Difference | Probability | Outlook |
+|----|--------------|---------------------|-------------|---------|
+| 5  | 60° | 59.3° - 60° = **0.7°** | 0% | None |
+| 6  | 57° | 59.3° - 57° = **2.3°** | 46% | Fair |
+| 7  | 54° | 59.3° - 54° = **5.3°** | 100% | Excellent |
 
 ## Data Sources
 
