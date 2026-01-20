@@ -100,16 +100,33 @@ Forecast Time: 2026-01-20 20:30 UTC
 
 Latitude effect: Each degree above minimum adds ~20% visibility probability
 
-Time_(UTC)        Kp  Min_Latitude  Probability  Outlook
-2026-01-20 21:00  3   ≥64°          0%           None
-2026-01-21 00:00  4   ≥62°          0%           None
-2026-01-21 03:00  5   ≥60°          0%           None
-2026-01-21 06:00  6   ≥57°          46%          Fair
+Time_(UTC)        Kp    Min_Latitude  Probability  Outlook
+2026-01-20 21:00  3.33  ≥64°          0%           None
+2026-01-21 00:00  4.67  ≥62°          0%           None
+2026-01-21 03:00  5.33  ≥60°          0%           None
+2026-01-21 06:00  6.67  ≥57°          46%          Fair
 
 Tip: Use 'aurora-cli --explain' for detailed probability mapping explanation
 ```
 
 ## How It Works
+
+### Kp Index Scale
+
+Kp indices use thirds ("tertiles") using whole numbers, and plus/minus symbols which translate to approximate decimal values of .33 and .67
+
+- Kp 5- → 4.67
+- Kp 6+ → 6.33
+
+
+### How the script Uses Kp Values
+
+1. NOAA's forecast data uses decimal values (eg. 5.33)
+2. To determine visibility, the script **rounds to the nearest whole number**:
+   - **5.00–5.49** → rounds to **5** → aurora visible at 60°+ latitude
+   - **5.50–6.49** → rounds to **6** → aurora visible at 57°+ latitude  
+   - **6.50–7.49** → rounds to **7** → aurora visible at 54°+ latitude
+
 
 ### Kp Index to Minimum Latitude Mapping
 
@@ -146,11 +163,11 @@ For each forecast period:
 
 Location: Stockholm, Sweden (59.3°N)
 
-| Kp | Min Latitude | Latitude Difference | Probability | Outlook |
-|----|--------------|---------------------|-------------|---------|
-| 5  | 60° | 59.3° - 60° = **0.7°** | 0% | None |
-| 6  | 57° | 59.3° - 57° = **2.3°** | 46% | Fair |
-| 7  | 54° | 59.3° - 54° = **5.3°** | 100% | Excellent |
+| Kp | Rounded | Min Latitude | Latitude Difference | Probability | Outlook |
+|----|---------|--------------|---------------------|-------------|---------|
+| 5.33 | 5 | 60° | 59.3° - 60° = **-0.7°** | 0% | None |
+| 5.67 | 6 | 57° | 59.3° - 57° = **2.3°** | 46% | Fair |
+| 6.67 | 7 | 54° | 59.3° - 54° = **5.3°** | 100% | Excellent |
 
 ## Data Sources
 

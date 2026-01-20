@@ -10,6 +10,7 @@ set -euo pipefail
 # Config
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
+readonly SCRIPT_VERSION="0.2.0"
 
 readonly NOAA_KP_FORECAST="https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
 readonly NOMINATIM="https://nominatim.openstreetmap.org/search"
@@ -64,6 +65,14 @@ $(echo -e "${COLOR_BOLD}Aurora Visibility Probability Mapping${COLOR_RESET}")
 
 $(echo -e "${COLOR_CYAN}How Kp Index Maps to Minimum Latitude:${COLOR_RESET}")
 
+  Kp indices use thirds using whole numbers, and plus/minus symbols,
+  which translate to approximate decimal values of .33 and .67
+
+  Kp 5- → 4.67
+  Kp 6+ → 6.33
+
+  The mapping rounds to the nearest integer for determining minimum latitude:
+
   Kp  Min Latitude  Description
   ━━  ━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    0       ≥67°    Auroras barely visible near poles
@@ -93,11 +102,11 @@ $(echo -e "${COLOR_CYAN}Latitude Effect:${COLOR_RESET}")
 $(echo -e "${COLOR_CYAN}Example:${COLOR_RESET}")
 
   Location: Stockholm, Sweden (59.3°N)
-  Kp Index: 5 (minimum latitude 60°)
+  Kp Index: 5.33 (rounds to Kp 5 with a minimum latitude 60°)
 
   Calculation: 59.3° < 60° → 0% probability (just below threshold)
 
-  If Kp = 6 (minimum 57°): 59.3° - 57° = 2.3° → 2.3 × 20 = 46% probability
+  If Kp = 6.67 (minimum 57°): 59.3° - 57° = 2.3° → 2.3 × 20 = 46% probability
 
 $(echo -e "${COLOR_BOLD}Note:${COLOR_RESET}") Actual visibility also depends on weather, light pollution, and time of day.
 EOF
@@ -227,20 +236,21 @@ display_forecast() {
     .[1:]
     | map({
         time: .[0],
-        kp: (.[1] | tonumber | floor)
+        kp: (.[1] | tonumber)
       })
     | map(select(.time >= $now))
     | map(. + {
         min_lat: (
-          if .kp >= 9 then 48
-          elif .kp == 8 then 51
-          elif .kp == 7 then 54
-          elif .kp == 6 then 57
-          elif .kp == 5 then 60
-          elif .kp == 4 then 62
-          elif .kp == 3 then 64
-          elif .kp == 2 then 65
-          elif .kp == 1 then 66
+          (.kp | round) as $kp_int |
+          if $kp_int >= 9 then 48
+          elif $kp_int == 8 then 51
+          elif $kp_int == 7 then 54
+          elif $kp_int == 6 then 57
+          elif $kp_int == 5 then 60
+          elif $kp_int == 4 then 62
+          elif $kp_int == 3 then 64
+          elif $kp_int == 2 then 65
+          elif $kp_int == 1 then 66
           else 67 end
         )
       })
