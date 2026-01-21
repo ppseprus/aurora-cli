@@ -15,6 +15,7 @@ readonly SCRIPT_VERSION="0.3.0"
 readonly GFZ_HP30_FORECAST="https://spaceweather.gfz.de/fileadmin/SW-Monitor/hp30_product_file_FORECAST_HP30_SWIFT_DRIVEN_LAST.csv"
 readonly NOAA_KP_FORECAST="https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
 readonly NOMINATIM="https://nominatim.openstreetmap.org/search"
+
 readonly USER_AGENT="aurora-cli/${SCRIPT_VERSION} (https://github.com/ppseprus/aurora-cli)"
 
 readonly HISTORICAL_ENTRIES=16  # Number of historical K-index entries to display when `--hist` is provided
@@ -42,16 +43,16 @@ fi
 usage() {
   cat >&2 <<EOF
 $(echo -e "${COLOR_BOLD}Usage:${COLOR_RESET}")
-  ${SCRIPT_NAME} [--GFZ|--Hp30] [--<hours>] <location>
-  ${SCRIPT_NAME} [--NOAA|--Kp] [--hist] [--<hours>] <location>
+  ${SCRIPT_NAME} [--Hp30|--GFZ] [--<hours>] <location>
+  ${SCRIPT_NAME} [--Kp|--NOAA] [--hist] [--<hours>] <location>
 
 $(echo -e "${COLOR_BOLD}Description:${COLOR_RESET}")
   Displays aurora visibility forecast based on geomagnetic indices and location.
   The closer you are to the poles, the higher your chances of seeing aurora.
 
 $(echo -e "${COLOR_BOLD}Data Source:${COLOR_RESET}")
-  --GFZ, --Hp30      Use GFZ/ESA Hp30 index w/ a 30-minute resolution $(echo -e "${COLOR_BOLD}(default)${COLOR_RESET}")
-  --NOAA, --Kp       Use NOAA Planetary Kp index w/ a 3-hour resolution
+  --Hp30, --GFZ      Use GFZ Hp30 index w/ a 30-minute resolution $(echo -e "${COLOR_BOLD}(default)${COLOR_RESET}")
+  --Kp, --NOAA       Use NOAA Planetary Kp index w/ a 3-hour resolution
 
 $(echo -e "${COLOR_BOLD}Options:${COLOR_RESET}")
   --<hours>          Limit forecast to next n hours (eg. --17) $(echo -e "${COLOR_BOLD}(default is 24)${COLOR_RESET}")
@@ -62,7 +63,7 @@ $(echo -e "${COLOR_BOLD}Options:${COLOR_RESET}")
 $(echo -e "${COLOR_BOLD}Examples:${COLOR_RESET}")
   ${SCRIPT_NAME} "Stockholm, Sweden"
   ${SCRIPT_NAME} --24 "Stockholm, Sweden"
-  ${SCRIPT_NAME} --NOAA --12 "Stockholm, Sweden"
+  ${SCRIPT_NAME} --Kp --12 "Stockholm, Sweden"
   ${SCRIPT_NAME} --explain
 EOF
 }
@@ -78,12 +79,12 @@ $(echo -e "${COLOR_CYAN}About Geomagnetic Indices:${COLOR_RESET}")
   aurora visibility probabilities for a given location:
 
   $(echo -e "${COLOR_BOLD}Hp30 (GFZ/ESA)${COLOR_RESET}") - Default source
-  • 30-minute resolution
-  • Provides higher temporal resolution for short-term aurora probabilities
+  • 30-minute resolution, suitable for short-term aurora probabilities
   • Open-ended scale — can exceed 9 during extreme storms
   • Model-driven forecast data
-  • Official data from GFZ Potsdam via ESA Space Weather Network
-  • Calculated from 13 globally distributed geomagnetic observatories
+  • Derived from 13 globally distributed geomagnetic observatories
+  • Produced by GFZ Potsdam and distributed via the ESA Space
+    Weather Service Network
 
   $(echo -e "${COLOR_BOLD}Kp (NOAA)${COLOR_RESET}") - Alternative source
   • 3-hour resolution
