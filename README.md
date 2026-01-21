@@ -46,12 +46,7 @@ git clone https://github.com/ppseprus/aurora-cli.git
 cd aurora-cli
 ```
 
-2. Make the script executable:
-```bash
-chmod +x aurora.sh
-```
-
-3. (Optional) Add to your PATH:
+2. (Optional) Add to your PATH:
 ```bash
 sudo ln -s "$(pwd)/aurora.sh" /usr/local/bin/aurora
 ```
