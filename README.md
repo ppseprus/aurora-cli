@@ -24,9 +24,9 @@ Aurora Forecast CLI retrieves latest geomagnetic forecast data from NOAA and cal
 
 ### Dependencies
 
-#### macOS (w/ Homebrew)
-
 _Note: `curl` and `column` are usually pre-installed._
+
+#### macOS (w/ Homebrew)
 
 ```bash
 brew install jq
@@ -34,10 +34,8 @@ brew install jq
 
 #### Ubuntu/Debian
 
-_Note: `curl` and `column` are usually pre-installed._
-
 ```bash
-sudo apt-get install jq curl
+sudo apt-get install jq
 ```
 
 ## Installation
