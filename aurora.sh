@@ -50,7 +50,7 @@ $(echo -e "${COLOR_BOLD}Description:${COLOR_RESET}")
   Displays aurora visibility forecast based on geomagnetic indices and location.
   The closer you are to the poles, the higher your chances of seeing aurora.
 
-$(echo -e "${COLOR_BOLD}Data Source:${COLOR_RESET}")
+$(echo -e "${COLOR_BOLD}Index/Data Source:${COLOR_RESET}")
   --Hp30, --GFZ      Use GFZ Hp30 index w/ a 30-minute resolution $(echo -e "${COLOR_BOLD}(default)${COLOR_RESET}")
   --Kp, --NOAA       Use NOAA Planetary Kp index w/ a 3-hour resolution
 
