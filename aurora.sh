@@ -549,7 +549,7 @@ display_forecast() {
   # Display header
   echo
   echo -e "${COLOR_BOLD}  AURORA VISIBILITY FORECAST${COLOR_RESET}"
-  echo -e "${COLOR_BOLD}=============================================================================${COLOR_RESET}"
+  echo -e "${COLOR_BOLD}================================================================================${COLOR_RESET}"
   echo
   echo -e "  ${COLOR_CYAN}Location:${COLOR_RESET}      ${location_name}"
   echo -e "  ${COLOR_CYAN}Coordinates:${COLOR_RESET}   ${latitude}°, ${longitude}°"
@@ -560,8 +560,9 @@ display_forecast() {
   echo
 
   # Display forecast table
+  # Generate table without colors, align with column, then apply colors to specific rows
   {
-    echo -e "${COLOR_BOLD}Time_(UTC)\t${index_name}\tMin_Lat\tProbability\tOutlook${COLOR_RESET}"
+    echo -e "Time_(UTC)\t${index_name}\tMin_Lat\tProbability\tOutlook"
 
     # Show historical data if available
     if [[ "${show_historical}" == "true" && -n "${historical_data}" ]]; then
@@ -575,7 +576,7 @@ display_forecast() {
         "\(.time)\t\(.index | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob)%\t\($outlook)"
       '
       # Separator between historical and forecast
-      echo -e "${COLOR_BOLD}━━━━━━ NOW ━━━━━━━${COLOR_RESET}\t\t\t\t"
+      echo -e "━━━━━ PRESENT ━━━━━\t\t\t\t"
     fi
 
     # Show forecast data
@@ -588,7 +589,12 @@ display_forecast() {
        else "Excellent" end) as $outlook |
       "\(.time)\t\(.index | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob)%\t\($outlook)"
     '
-  } | column -t -s $'\t'
+  } | column -t -s $'\t' \
+    | awk -v bold="${COLOR_BOLD}" -v reset="${COLOR_RESET}" '
+      NR == 1 { print bold $0 reset; next }
+      /^━━━━━ PRESENT ━━━━━/ { print bold $0 reset; next }
+      { print }
+    '
 
   echo
   echo -e "  ${COLOR_CYAN}Tip:${COLOR_RESET} Run '${SCRIPT_NAME} --explain' for detailed probability calculations"

@@ -92,31 +92,30 @@ Options:
 → Fetching coordinates for: Stockholm, Sweden
 → Retrieving GFZ/ESA Hp30 forecast...
 
-━━━ Aurora Forecast ━━━
-Location: Stockholm, Stockholms kommun, Stockholms län, 111 29, Sverige
-Coordinates: 59.33°, 18.07°
-Forecast Time: 2026-01-21 23:47 UTC
+  AURORA VISIBILITY FORECAST
+================================================================================
 
-Latitude effect: Each degree above minimum adds ~20% visibility probability
+  Location:      Stockholm, Stockholms kommun, Stockholms län, 111 29, Sverige
+  Coordinates:   59.33°, 18.07°
+  Data Source:   GFZ Hp30
+  Forecast Time: 2026-01-22 23:27 UTC
 
-Time_(UTC)        Hp30  Min_Latitude  Probability  Outlook
-2026-01-22 00:00  3.67  ≥62°          0%           None
-2026-01-22 00:30  4.33  ≥62°          0%           None
-2026-01-22 01:00  4.33  ≥62°          0%           None
-2026-01-22 01:30  4     ≥62°          0%           None
-2026-01-22 02:00  4     ≥62°          0%           None
-2026-01-22 02:30  4     ≥62°          0%           None
-2026-01-22 03:00  4     ≥62°          0%           None
-2026-01-22 03:30  4     ≥62°          0%           None
-2026-01-22 04:00  4     ≥62°          0%           None
-2026-01-22 04:30  4     ≥62°          0%           None
-2026-01-22 05:00  4     ≥62°          0%           None
-2026-01-22 05:30  4     ≥62°          0%           None
-2026-01-22 06:00  4     ≥62°          0%           None
-2026-01-22 06:30  4     ≥62°          0%           None
+  Note: Each degree above minimum latitude adds ~20% visibility probability
+
+Time_(UTC)        Hp30  Min_Lat  Probability  Outlook
+2026-01-22 23:30  4     ≥62°     0%           None
+2026-01-23 00:00  4     ≥62°     0%           None
+2026-01-23 00:30  4     ≥62°     0%           None
+2026-01-23 01:00  3.67  ≥62°     0%           None
+2026-01-23 01:30  3.67  ≥62°     0%           None
+2026-01-23 02:00  4     ≥62°     0%           None
+2026-01-23 02:30  3.67  ≥62°     0%           None
+2026-01-23 03:00  3.67  ≥62°     0%           None
+2026-01-23 03:30  3.67  ≥62°     0%           None
+2026-01-23 04:00  3.67  ≥62°     0%           None
 ...
 
-Tip: Use 'aurora-cli --explain' for detailed probability mapping explanation
+  Tip: Run 'aurora --explain' for detailed probability calculations
 ```
 
 ## How It Works
