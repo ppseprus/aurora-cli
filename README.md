@@ -47,23 +47,51 @@ sudo ln -s "$(pwd)/aurora.sh" /usr/local/bin/aurora
 ### Command-Line Options
 
 ```
-Usage:
-  aurora [--Hp30|--GFZ] [--<hours>] <location>
-  aurora [--Kp|--NOAA] [--hist] [--<hours>] <location>
+USAGE
+  aurora [OPTIONS] <location>
 
-Description:
-  Displays aurora visibility forecast based on geomagnetic indices and location.
-  The closer you are to the poles, the higher your chances of seeing aurora.
+DESCRIPTION
+  Display aurora visibility forecast based on geomagnetic indices and your location.
+  The closer you are to the magnetic poles, the higher your chances of seeing aurora.
 
-Index/Data Source:
-  --Hp30, --GFZ      Use GFZ Hp30 index w/ a 30-minute resolution (default)
-  --Kp, --NOAA       Use NOAA Planetary Kp index w/ a 3-hour resolution
+INDEX / DATA SOURCE OPTIONS
+  --Hp30, --GFZ
+      Use the GFZ Hp30 geomagnetic index (30-minute resolution). [default]
 
-Options:
-  --<hours>          Limit forecast to next n hours (eg. --17) (default is 24)
-  --hist             Include historical data (only when NOAA is the data source)
-  --help             Show this help message
-  --explain          Show detailed explanation of probability mapping
+  --Kp, --NOAA
+      Use the NOAA Kp geomagnetic index (3-hour resolution).
+
+FORECAST OPTIONS
+  --<hours>
+      Limit forecast to next N hours.
+      Values can range from 1 to 72. [default: 24]
+
+  --hist
+      Include historical data.
+      Only supported when using NOAA Kp as data source.
+
+INFORMATION OPTIONS
+  -h, --help
+      Show this help message.
+
+  -v, --version
+      Show version information.
+
+  --explain
+      Show detailed explanation of probability calculations.
+
+EXAMPLES
+  aurora "Stockholm, Sweden"
+  aurora "68.4363°N 17.3983°E"
+  aurora --48 "Reykjavik, Iceland"
+  aurora --Kp --hist --12 "Tromsø, Norway"
+  aurora --explain
+
+LOCATION FORMAT
+  Locations can be specified as:
+  • City names: "Stockholm, Sweden" or "City, State, Country"
+  • Geographic coordinates: "68.4363°N 17.3983°E"
+  The tool will geocode your input using OpenStreetMap Nominatim.
 ```
 
 ### Examples

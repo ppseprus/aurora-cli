@@ -61,18 +61,30 @@ $(echo -e "${COLOR_BOLD}DESCRIPTION${COLOR_RESET}")
   The closer you are to the magnetic poles, the higher your chances of seeing aurora.
 
 $(echo -e "${COLOR_BOLD}INDEX / DATA SOURCE OPTIONS${COLOR_RESET}")
-  --Hp30, --GFZ       Use GFZ Hp30 index (30-minute resolution) $(echo -e "${COLOR_BOLD}[default]${COLOR_RESET}")
-  --Kp, --NOAA        Use NOAA Kp index (3-hour resolution)
+  --Hp30, --GFZ
+      Use the GFZ Hp30 geomagnetic index (30-minute resolution). $(echo -e "${COLOR_BOLD}[default]${COLOR_RESET}")
+
+  --Kp, --NOAA
+      Use the NOAA Kp geomagnetic index (3-hour resolution).
 
 $(echo -e "${COLOR_BOLD}FORECAST OPTIONS${COLOR_RESET}")
-  --<hours>           Limit forecast to next N hours (e.g., --12, --48)
-                      $(echo -e "${COLOR_BOLD}[default: 24]${COLOR_RESET}")
-  --hist              Include historical data (NOAA source only)
+  --<hours>
+      Limit forecast to next N hours.
+      Values can range from 1 to 72. $(echo -e "${COLOR_BOLD}[default: 24]${COLOR_RESET}")
+
+  --hist
+      Include historical data.
+      Only supported when using NOAA Kp as data source.
 
 $(echo -e "${COLOR_BOLD}INFORMATION OPTIONS${COLOR_RESET}")
-  -h, --help          Show this help message and exit
-  -v, --version       Show version information and exit
-  --explain           Show detailed explanation of probability calculations
+  -h, --help
+      Show this help message.
+
+  -v, --version
+      Show version information.
+
+  --explain
+      Show detailed explanation of probability calculations.
 
 $(echo -e "${COLOR_BOLD}EXAMPLES${COLOR_RESET}")
   ${SCRIPT_NAME} "Stockholm, Sweden"
