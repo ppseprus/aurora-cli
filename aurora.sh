@@ -7,18 +7,24 @@
 #
 set -euo pipefail
 
-# Config
+# Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.3.0"
+readonly SCRIPT_VERSION="0.4.0"
 
-readonly GFZ_HP30_FORECAST="https://spaceweather.gfz.de/fileadmin/SW-Monitor/hp30_product_file_FORECAST_HP30_SWIFT_DRIVEN_LAST.csv"
-readonly NOAA_KP_FORECAST="https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
-readonly NOMINATIM="https://nominatim.openstreetmap.org/search"
+# API Endpoints
+readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
+readonly API_GFZ_HP30="https://spaceweather.gfz.de/fileadmin/SW-Monitor/hp30_product_file_FORECAST_HP30_SWIFT_DRIVEN_LAST.csv"
+readonly API_NOAA_KP="https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
 
+# HTTP Configuration
 readonly USER_AGENT="aurora-cli/${SCRIPT_VERSION} (https://github.com/ppseprus/aurora-cli)"
+readonly HTTP_TIMEOUT=30
 
-readonly HISTORICAL_ENTRIES=16  # Number of historical K-index entries to display when `--hist` is provided
+# Display Configuration
+readonly DEFAULT_FORECAST_HOURS=24
+readonly MAX_HISTORICAL_ENTRIES=16
+readonly PROBABILITY_INCREMENT_PER_DEGREE=20
 
 # Color codes (disabled if not in TTY)
 if [[ -t 1 ]]; then
@@ -39,32 +45,47 @@ else
   readonly COLOR_CYAN=''
 fi
 
+# Display version information
+show_version() {
+  echo "aurora-cli ${SCRIPT_VERSION}"
+}
+
 # Display usage information
-usage() {
+show_usage() {
   cat >&2 <<EOF
-$(echo -e "${COLOR_BOLD}Usage:${COLOR_RESET}")
-  ${SCRIPT_NAME} [--Hp30|--GFZ] [--<hours>] <location>
-  ${SCRIPT_NAME} [--Kp|--NOAA] [--hist] [--<hours>] <location>
+$(echo -e "${COLOR_BOLD}USAGE${COLOR_RESET}")
+  ${SCRIPT_NAME} [OPTIONS] <location>
 
-$(echo -e "${COLOR_BOLD}Description:${COLOR_RESET}")
-  Displays aurora visibility forecast based on geomagnetic indices and location.
-  The closer you are to the poles, the higher your chances of seeing aurora.
+$(echo -e "${COLOR_BOLD}DESCRIPTION${COLOR_RESET}")
+  Display aurora visibility forecast based on geomagnetic indices and your location.
+  The closer you are to the magnetic poles, the higher your chances of seeing aurora.
 
-$(echo -e "${COLOR_BOLD}Index/Data Source:${COLOR_RESET}")
-  --Hp30, --GFZ      Use GFZ Hp30 index w/ a 30-minute resolution $(echo -e "${COLOR_BOLD}(default)${COLOR_RESET}")
-  --Kp, --NOAA       Use NOAA Planetary Kp index w/ a 3-hour resolution
+$(echo -e "${COLOR_BOLD}INDEX / DATA SOURCE OPTIONS${COLOR_RESET}")
+  --Hp30, --GFZ       Use GFZ Hp30 index (30-minute resolution) $(echo -e "${COLOR_BOLD}[default]${COLOR_RESET}")
+  --Kp, --NOAA        Use NOAA Kp index (3-hour resolution)
 
-$(echo -e "${COLOR_BOLD}Options:${COLOR_RESET}")
-  --<hours>          Limit forecast to next n hours (eg. --17) $(echo -e "${COLOR_BOLD}(default is 24)${COLOR_RESET}")
-  --hist             Include historical data $(echo -e "${COLOR_BOLD}(only when NOAA is the data source)${COLOR_RESET}")
-  --help             Show this help message
-  --explain          Show detailed explanation of probability mapping
+$(echo -e "${COLOR_BOLD}FORECAST OPTIONS${COLOR_RESET}")
+  --<hours>           Limit forecast to next N hours (e.g., --12, --48)
+                      $(echo -e "${COLOR_BOLD}[default: 24]${COLOR_RESET}")
+  --hist              Include historical data (NOAA source only)
 
-$(echo -e "${COLOR_BOLD}Examples:${COLOR_RESET}")
+$(echo -e "${COLOR_BOLD}INFORMATION OPTIONS${COLOR_RESET}")
+  -h, --help          Show this help message and exit
+  -v, --version       Show version information and exit
+  --explain           Show detailed explanation of probability calculations
+
+$(echo -e "${COLOR_BOLD}EXAMPLES${COLOR_RESET}")
   ${SCRIPT_NAME} "Stockholm, Sweden"
-  ${SCRIPT_NAME} --24 "Stockholm, Sweden"
-  ${SCRIPT_NAME} --Kp --12 "Stockholm, Sweden"
+  ${SCRIPT_NAME} "68.4363°N 17.3983°E"
+  ${SCRIPT_NAME} --48 "Reykjavik, Iceland"
+  ${SCRIPT_NAME} --Kp --hist --12 "Tromsø, Norway"
   ${SCRIPT_NAME} --explain
+
+$(echo -e "${COLOR_BOLD}LOCATION FORMAT${COLOR_RESET}")
+  Locations can be specified as:
+  • City names: "Stockholm, Sweden" or "City, State, Country"
+  • Geographic coordinates: "68.4363°N 17.3983°E"
+  The tool will geocode your input using OpenStreetMap Nominatim.
 EOF
 }
 
@@ -118,11 +139,12 @@ $(echo -e "${COLOR_CYAN}Index Scale and Minimum Latitude Mapping:${COLOR_RESET}"
 
 $(echo -e "${COLOR_CYAN}Probability Calculation:${COLOR_RESET}")
 
-  Your location's latitude determines aurora visibility probability:
+  Your location's absolute latitude determines aurora visibility probability:
 
-  • If your latitude < minimum latitude → 0% (too far from poles)
-  • For each degree above minimum → +20% visibility probability
+  • If |latitude| < minimum latitude → 0% (too far from magnetic poles)
+  • For each degree above minimum → +${PROBABILITY_INCREMENT_PER_DEGREE}% visibility probability
   • Probability caps at 100% when 5° or more above minimum
+  • Formula: probability = min(100, max(0, (|latitude| - min_latitude) × ${PROBABILITY_INCREMENT_PER_DEGREE}))
 
 $(echo -e "${COLOR_CYAN}Latitude Effect:${COLOR_RESET}")
 
@@ -153,334 +175,437 @@ $(echo -e "${COLOR_CYAN}Naming:${COLOR_RESET}")
 EOF
 }
 
-# Error handling function
+# Error handling
 error_exit() {
-  echo -e "${COLOR_RED}Error:${COLOR_RESET} $1" >&2
-  exit "${2:-1}"
+  local message="$1"
+  local exit_code="${2:-1}"
+  echo -e "${COLOR_RED}Error:${COLOR_RESET} ${message}" >&2
+  exit "${exit_code}"
 }
 
-# Check dependencies
+# Info output
+info() {
+  local message="$1"
+  echo -e "${COLOR_BLUE}→${COLOR_RESET} ${message}" >&2
+}
+
+# Check required dependencies
 check_dependencies() {
-  local missing_deps=()
+  # Only check for jq - all other tools (curl, awk, bc, column) are standard utilities
+  if ! command -v jq &>/dev/null; then
+    error_exit "Missing required dependency: jq\n\nPlease install it using your package manager:\n  macOS:   brew install jq\n  Ubuntu:  sudo apt install jq\n  Fedora:  sudo dnf install jq"
+  fi
+}
 
-  for cmd in curl jq column; do
-    if ! command -v "$cmd" &>/dev/null; then
-      missing_deps+=("$cmd")
-    fi
-  done
-
-  if [[ ${#missing_deps[@]} -gt 0 ]]; then
-    error_exit "Missing required dependencies: ${missing_deps[*]}\nPlease install them to continue." 1
+# Validate hours parameter
+validate_hours() {
+  local hours="$1"
+  if [[ ! "${hours}" =~ ^[0-9]+$ ]]; then
+    error_exit "Invalid hours value: ${hours}. Must be a positive integer."
+  fi
+  if [[ ${hours} -lt 1 || ${hours} -gt 72 ]]; then
+    error_exit "Hours must be between 1 and 72. Got: ${hours}"
   fi
 }
 
 # Parse command line arguments
 parse_args() {
   local location=""
-  local show_hist="false"
-  local data_source=""
-  local hours="24"
+  local show_historical="false"
+  local data_source="GFZ"
+  local forecast_hours="${DEFAULT_FORECAST_HOURS}"
 
-  # No arguments provided
+  # Handle no arguments
   if [[ $# -eq 0 ]]; then
-    usage
+    show_usage
     exit 1
   fi
 
+  # Parse arguments
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --help)
-        usage
+      -h|--help)
+        show_usage
+        exit 0
+        ;;
+      -v|--version)
+        show_version
         exit 0
         ;;
       --explain)
         explain
         exit 0
         ;;
-      --NOAA|--Kp)
-        if [[ -n "$data_source" ]]; then
-          usage
-          exit 1
-        fi
-        data_source="NOAA"
-        shift
-        ;;
       --GFZ|--Hp30)
-        if [[ -n "$data_source" ]]; then
-          usage
-          exit 1
-        fi
         data_source="GFZ"
         shift
         ;;
+      --NOAA|--Kp)
+        data_source="NOAA"
+        shift
+        ;;
       --hist)
-        show_hist="true"
+        show_historical="true"
         shift
         ;;
       --[0-9]*)
-        # Handle --<hours> format (eg. --12, --24, --48)
-        hours="${1#--}"
-        if [[ ! "$hours" =~ ^[0-9]+$ ]]; then
-          usage
-          exit 1
-        fi
+        # Extract hours from --<hours> format (e.g., --12, --24, --48)
+        forecast_hours="${1#--}"
+        validate_hours "${forecast_hours}"
         shift
         ;;
       -*)
-        usage
-        exit 1
+        error_exit "Unknown option: $1\n\nRun '${SCRIPT_NAME} --help' for usage information."
         ;;
       *)
-        if [[ -z "$location" ]]; then
+        if [[ -z "${location}" ]]; then
           location="$1"
-          shift
         else
-          usage
-          exit 1
+          error_exit "Multiple locations specified. Please provide only one location."
         fi
+        shift
         ;;
     esac
   done
 
-  if [[ -z "$data_source" ]]; then
-    data_source="GFZ"
+  # Validate required arguments
+  if [[ -z "${location}" ]]; then
+    error_exit "Location is required.\n\nRun '${SCRIPT_NAME} --help' for usage information."
   fi
 
-  if [[ -z "$location" ]]; then
-    usage
-    exit 1
+  # Validate incompatible options
+  if [[ "${show_historical}" == "true" && "${data_source}" == "GFZ" ]]; then
+    error_exit "Historical data (--hist) is only available with NOAA data source (--Kp or --NOAA)."
   fi
 
-  if [[ "$show_hist" == "true" && "$data_source" == "GFZ" ]]; then
-    usage
-    exit 1
-  fi
-
-  echo "${location}|${show_hist}|${data_source}|${hours}"
+  echo "${location}|${show_historical}|${data_source}|${forecast_hours}"
 }
 
-# Fetch geocoding data
+# Geocode location to coordinates
 geocode_location() {
   local location="$1"
   local geo_json
+  local lat lon display_name
 
-  echo -e "${COLOR_BLUE}→${COLOR_RESET} Fetching coordinates for: ${COLOR_BOLD}${location}${COLOR_RESET}" >&2
+  info "Fetching coordinates for: ${COLOR_BOLD}${location}${COLOR_RESET}"
 
   geo_json=$(curl -sf \
-    -H "User-Agent: $USER_AGENT" \
-    --get "$NOMINATIM" \
-    --data-urlencode "q=$location" \
+    -m "${HTTP_TIMEOUT}" \
+    -H "User-Agent: ${USER_AGENT}" \
+    --get "${API_GEOCODING}" \
+    --data-urlencode "q=${location}" \
     --data "format=json" \
     --data "limit=1") || error_exit "Failed to connect to geocoding service."
 
-  local lat lon display_name
-  lat=$(echo "$geo_json" | jq -r '.[0].lat // empty')
-  lon=$(echo "$geo_json" | jq -r '.[0].lon // empty')
-  display_name=$(echo "$geo_json" | jq -r '.[0].display_name // empty')
+  # Parse geocoding response
+  lat=$(echo "${geo_json}" | jq -r '.[0].lat // empty')
+  lon=$(echo "${geo_json}" | jq -r '.[0].lon // empty')
+  display_name=$(echo "${geo_json}" | jq -r '.[0].display_name // empty')
 
-  if [[ -z "$lat" || -z "$lon" ]]; then
-    error_exit "Location not found: ${location}\nTry a different format (eg. 'City, Country')"
+  # Validate geocoding results
+  if [[ -z "${lat}" || -z "${lon}" ]]; then
+    error_exit "Location not found: ${location}\n\nTry using a more specific format:\n  • City, Country (e.g., 'Stockholm, Sweden')\n  • City, State, Country (e.g., 'Portland, Oregon, USA')"
   fi
 
-  lat=$(printf "%.2f" "$lat")
-  lon=$(printf "%.2f" "$lon")
+  # Format coordinates to 2 decimal places
+  lat=$(printf "%.2f" "${lat}")
+  lon=$(printf "%.2f" "${lon}")
 
-  echo "$lat|$lon|$display_name"
+  echo "${lat}|${lon}|${display_name}"
 }
 
-# Fetch NOAA Kp forecast
-fetch_kp_forecast() {
-  echo -e "${COLOR_BLUE}→${COLOR_RESET} Retrieving NOAA Planetary K-index forecast..." >&2
+# Fetch NOAA Kp forecast data
+fetch_noaa_kp_forecast() {
+  info "Retrieving NOAA Planetary Kp-index forecast..."
 
-  curl -sf "$NOAA_KP_FORECAST" || error_exit "Failed to fetch NOAA K-index forecast."
+  local forecast_data
+  forecast_data=$(curl -sf \
+    -m "${HTTP_TIMEOUT}" \
+    -H "User-Agent: ${USER_AGENT}" \
+    "${API_NOAA_KP}") || error_exit "Failed to fetch NOAA Kp-index forecast. Please try again later."
+
+  # Validate JSON response
+  if ! echo "${forecast_data}" | jq -e '.[0][0]' &>/dev/null; then
+    error_exit "Invalid response from NOAA API. Please try again later."
+  fi
+
+  echo "${forecast_data}"
 }
 
-# Fetch GFZ/ESA Hp30 forecast
-fetch_hp30_forecast() {
-  echo -e "${COLOR_BLUE}→${COLOR_RESET} Retrieving GFZ/ESA Hp30 forecast..." >&2
+# Fetch GFZ/ESA Hp30 forecast data
+fetch_gfz_hp30_forecast() {
+  info "Retrieving GFZ/ESA Hp30 forecast..."
 
   local csv_data
-  csv_data=$(curl -sf "$GFZ_HP30_FORECAST") || error_exit "Failed to fetch GFZ/ESA Hp30 forecast."
+  csv_data=$(curl -sf \
+    -m "${HTTP_TIMEOUT}" \
+    -H "User-Agent: ${USER_AGENT}" \
+    "${API_GFZ_HP30}") || error_exit "Failed to fetch GFZ/ESA Hp30 forecast. Please try again later."
+
+  # Validate CSV response
+  if [[ -z "${csv_data}" ]]; then
+    error_exit "Empty response from GFZ API. Please try again later."
+  fi
 
   # Convert CSV to JSON format
-  # Skip header line and extract Time (UTC) and median columns
-  echo "$csv_data" | tail -n +2 | awk -F',' '
+  # Skip header line and extract Time (UTC) column 1 and median column 4
+  local json_data
+  json_data=$(echo "${csv_data}" | tail -n +2 | awk -F',' '
     BEGIN { print "[" }
     NR > 1 { print "," }
     {
-      # Remove leading/trailing spaces from time and median values
+      # Remove leading/trailing whitespace
       gsub(/^[ \t]+|[ \t]+$/, "", $1)
       gsub(/^[ \t]+|[ \t]+$/, "", $4)
-      # Parse date format: DD-MM-YYYY HH:MM
-      # Split on space to separate date and time
+
+      # Parse date format: DD-MM-YYYY HH:MM to YYYY-MM-DD HH:MM
       split($1, datetime, " ")
-      # Split date part: DD-MM-YYYY
       split(datetime[1], dateparts, "-")
       day = dateparts[1]
       month = dateparts[2]
       year = dateparts[3]
       time_part = datetime[2]
-      # Construct YYYY-MM-DD HH:MM format
+
+      # Output JSON array format ["timestamp", value]
       formatted_time = year "-" month "-" day " " time_part
       printf "[\"" formatted_time "\"," $4 "]"
     }
     END { print "\n]" }
-  ' | jq -c .
+  ')
+
+  # Validate JSON output
+  if ! echo "${json_data}" | jq -e '.[0][0]' &>/dev/null; then
+    error_exit "Failed to parse GFZ Hp30 data. Please try again later."
+  fi
+
+  echo "${json_data}" | jq -c .
 }
 
-# Calculate and display aurora forecast
+# Map geomagnetic index to minimum latitude for aurora visibility
+# Uses rounded index value to determine latitude threshold
+get_minimum_latitude() {
+  local index_value="$1"
+  local rounded_index
+
+  # Round to nearest integer using bc for precision
+  rounded_index=$(printf "%.0f" "${index_value}")
+
+  # Map index to minimum latitude based on scientific data
+  case "${rounded_index}" in
+    0) echo "67" ;;
+    1) echo "66" ;;
+    2) echo "65" ;;
+    3) echo "64" ;;
+    4) echo "62" ;;
+    5) echo "60" ;;
+    6) echo "57" ;;
+    7) echo "54" ;;
+    8) echo "51" ;;
+    *) echo "48" ;;  # 9 and above
+  esac
+}
+
+# Calculate aurora visibility probability based on latitude and index
+calculate_visibility_probability() {
+  local latitude="$1"
+  local min_latitude="$2"
+  local lat_diff
+  local probability
+
+  # Use absolute value of latitude (works for both hemispheres)
+  latitude=$(echo "${latitude}" | awk '{print ($1 < 0) ? -$1 : $1}')
+
+  # Calculate latitude difference
+  lat_diff=$(echo "${latitude} - ${min_latitude}" | bc)
+
+  # Calculate probability: 0% if below threshold, +20% per degree above
+  probability=$(echo "${lat_diff} * ${PROBABILITY_INCREMENT_PER_DEGREE}" | bc | cut -d'.' -f1)
+
+  # Clamp between 0 and 100
+  if [[ ${probability} -lt 0 ]]; then
+    echo "0"
+  elif [[ ${probability} -gt 100 ]]; then
+    echo "100"
+  else
+    echo "${probability}"
+  fi
+}
+
+# Get outlook category based on probability
+get_outlook_category() {
+  local probability="$1"
+
+  if [[ ${probability} -eq 0 ]]; then
+    echo "None"
+  elif [[ ${probability} -le 20 ]]; then
+    echo "Low"
+  elif [[ ${probability} -le 50 ]]; then
+    echo "Fair"
+  elif [[ ${probability} -le 75 ]]; then
+    echo "Good"
+  else
+    echo "Excellent"
+  fi
+}
+
+# Display aurora forecast
 display_forecast() {
-  local lat="$1"
-  local lon="$2"
-  local display_name="$3"
-  local kp_json="$4"
-  local show_hist="${5:-false}"
-  local data_source="${6:-NOAA}"
-  local hours="${7:-24}"
-  local utc_now
+  local latitude="$1"
+  local longitude="$2"
+  local location_name="$3"
+  local forecast_json="$4"
+  local show_historical="${5:-false}"
+  local data_source="${6:-GFZ}"
+  local forecast_hours="${7:-24}"
+  local current_utc_time
 
-  utc_now=$(date -u +"%Y-%m-%d %H:%M")
+  current_utc_time=$(date -u +"%Y-%m-%d %H:%M")
 
+  # Determine index name for display
   local index_name
-  if [[ "$data_source" == "GFZ" ]]; then
+  if [[ "${data_source}" == "GFZ" ]]; then
     index_name="Hp30"
   else
     index_name="Kp"
   fi
 
+  # Calculate maximum forecast entries based on resolution
+  local max_forecast_entries
+  if [[ "${data_source}" == "GFZ" ]]; then
+    # GFZ: 30-minute resolution = 2 entries per hour
+    max_forecast_entries=$((forecast_hours * 2))
+  else
+    # NOAA: 3-hour resolution = 1 entry per 3 hours
+    max_forecast_entries=$(( (forecast_hours + 2) / 3 ))
+  fi
+
   # Process historical data if requested
-  local hist_data=""
-  if [[ "$show_hist" == "true" ]]; then
-    hist_data=$(echo "$kp_json" | jq -r --arg lat "$lat" --arg now "$utc_now" --argjson entries "$HISTORICAL_ENTRIES" '
+  local historical_data=""
+  if [[ "${show_historical}" == "true" ]]; then
+    historical_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_hist "${MAX_HISTORICAL_ENTRIES}" '
       .[1:]
-      | map({
-          time: .[0],
-          kp: (.[1] | tonumber)
-        })
+      | map({time: .[0], index: (.[1] | tonumber)})
       | map(select(.time < $now))
       | sort_by(.time)
-      | .[-$entries:]
+      | .[-$max_hist:]
       | map(. + {
           min_lat: (
-            (.kp | round) as $kp_int |
-            if $kp_int >= 9 then 48
-            elif $kp_int == 8 then 51
-            elif $kp_int == 7 then 54
-            elif $kp_int == 6 then 57
-            elif $kp_int == 5 then 60
-            elif $kp_int == 4 then 62
-            elif $kp_int == 3 then 64
-            elif $kp_int == 2 then 65
-            elif $kp_int == 1 then 66
+            (.index | round) as $rounded |
+            if $rounded >= 9 then 48
+            elif $rounded == 8 then 51
+            elif $rounded == 7 then 54
+            elif $rounded == 6 then 57
+            elif $rounded == 5 then 60
+            elif $rounded == 4 then 62
+            elif $rounded == 3 then 64
+            elif $rounded == 2 then 65
+            elif $rounded == 1 then 66
             else 67 end
           )
         })
       | map(. + {
           prob: (
-            (($lat | tonumber) - .min_lat) as $d
-            | if $d <= 0 then 0
-              else ( ($d * 20) | if . > 100 then 100 else . end )
+            (($lat | tonumber | fabs) - .min_lat) as $diff
+            | if $diff <= 0 then 0
+              else (($diff * 20) | if . > 100 then 100 else . end | floor)
               end
           )
         })
     ')
   fi
 
-  # Calculate max entries based on data source resolution
-  local max_entries
-  if [[ "$data_source" == "GFZ" ]]; then
-    # GFZ has 30-minute resolution: 2 entries per hour
-    max_entries=$((hours * 2))
-  else
-    # NOAA has 3-hour resolution: 1 entry per 3 hours
-    max_entries=$(( (hours + 2) / 3 ))
-  fi
-
-  local table_data
-  table_data=$(echo "$kp_json" | jq -r --arg lat "$lat" --arg now "$utc_now" --argjson max_entries "$max_entries" '
+  # Process forecast data
+  local forecast_data
+  forecast_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_entries "${max_forecast_entries}" '
     .[1:]
-    | map({
-        time: .[0],
-        kp: (.[1] | tonumber)
-      })
+    | map({time: .[0], index: (.[1] | tonumber)})
     | map(select(.time >= $now))
     | .[0:$max_entries]
     | map(. + {
         min_lat: (
-          (.kp | round) as $kp_int |
-          if $kp_int >= 9 then 48
-          elif $kp_int == 8 then 51
-          elif $kp_int == 7 then 54
-          elif $kp_int == 6 then 57
-          elif $kp_int == 5 then 60
-          elif $kp_int == 4 then 62
-          elif $kp_int == 3 then 64
-          elif $kp_int == 2 then 65
-          elif $kp_int == 1 then 66
+          (.index | round) as $rounded |
+          if $rounded >= 9 then 48
+          elif $rounded == 8 then 51
+          elif $rounded == 7 then 54
+          elif $rounded == 6 then 57
+          elif $rounded == 5 then 60
+          elif $rounded == 4 then 62
+          elif $rounded == 3 then 64
+          elif $rounded == 2 then 65
+          elif $rounded == 1 then 66
           else 67 end
         )
       })
     | map(. + {
         prob: (
-          (($lat | tonumber) - .min_lat) as $d
-          | if $d <= 0 then 0
-            else ( ($d * 20) | if . > 100 then 100 else . end )
+          (($lat | tonumber | fabs) - .min_lat) as $diff
+          | if $diff <= 0 then 0
+            else (($diff * 20) | if . > 100 then 100 else . end | floor)
             end
         )
       })
   ')
 
-  # Header
+  # Display header
   echo
-  echo -e "${COLOR_BOLD}━━━ Aurora Forecast ━━━${COLOR_RESET}"
-  echo -e "${COLOR_CYAN}Location:${COLOR_RESET} ${display_name}"
-  echo -e "${COLOR_CYAN}Coordinates:${COLOR_RESET} ${lat}°, ${lon}°"
-  echo -e "${COLOR_CYAN}Forecast Time:${COLOR_RESET} ${utc_now} UTC"
+  echo -e "${COLOR_BOLD}  AURORA VISIBILITY FORECAST${COLOR_RESET}"
+  echo -e "${COLOR_BOLD}=============================================================================${COLOR_RESET}"
   echo
-  echo -e "${COLOR_BOLD}Latitude effect:${COLOR_RESET} Each degree above minimum adds ~20% visibility probability"
+  echo -e "  ${COLOR_CYAN}Location:${COLOR_RESET}      ${location_name}"
+  echo -e "  ${COLOR_CYAN}Coordinates:${COLOR_RESET}   ${latitude}°, ${longitude}°"
+  echo -e "  ${COLOR_CYAN}Data Source:${COLOR_RESET}   ${data_source} ${index_name}"
+  echo -e "  ${COLOR_CYAN}Forecast Time:${COLOR_RESET} ${current_utc_time} UTC"
+  echo
+  echo -e "  ${COLOR_BOLD}Note:${COLOR_RESET} Each degree above minimum latitude adds ~${PROBABILITY_INCREMENT_PER_DEGREE}% visibility probability"
   echo
 
-  # Table
+  # Display forecast table
   {
-    echo -e "Time_(UTC)\t${index_name}\tMin_Latitude\tProbability\tOutlook"
+    echo -e "${COLOR_BOLD}Time_(UTC)\t${index_name}\tMin_Lat\tProbability\tOutlook${COLOR_RESET}"
 
-    # Display historical data if available
-    if [[ "$show_hist" == "true" && -n "$hist_data" ]]; then
-      echo "$hist_data" | jq -r '
+    # Show historical data if available
+    if [[ "${show_historical}" == "true" && -n "${historical_data}" ]]; then
+      echo "${historical_data}" | jq -r '
         .[] |
         (if .prob == 0 then "None"
          elif .prob <= 20 then "Low"
          elif .prob <= 50 then "Fair"
          elif .prob <= 75 then "Good"
          else "Excellent" end) as $outlook |
-        "\(.time)\t\(.kp | tonumber | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob | floor)%\t\($outlook)"
+        "\(.time)\t\(.index | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob)%\t\($outlook)"
       '
-      # Visual divider between historical and forecast data
-      echo -e "${COLOR_BOLD}━━━ FORECAST ━━━${COLOR_RESET}\t\t\t\t"
+      # Separator between historical and forecast
+      echo -e "${COLOR_BOLD}━━━━━━ NOW ━━━━━━━${COLOR_RESET}\t\t\t\t"
     fi
 
-    echo "$table_data" | jq -r '
+    # Show forecast data
+    echo "${forecast_data}" | jq -r '
       .[] |
       (if .prob == 0 then "None"
        elif .prob <= 20 then "Low"
        elif .prob <= 50 then "Fair"
        elif .prob <= 75 then "Good"
        else "Excellent" end) as $outlook |
-      "\(.time)\t\(.kp | tonumber | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob | floor)%\t\($outlook)"
+      "\(.time)\t\(.index | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob)%\t\($outlook)"
     '
   } | column -t -s $'\t'
 
   echo
-  echo -e "${COLOR_CYAN}Tip:${COLOR_RESET} Use '${SCRIPT_NAME} --explain' for detailed probability mapping explanation"
+  echo -e "  ${COLOR_CYAN}Tip:${COLOR_RESET} Run '${SCRIPT_NAME} --explain' for detailed probability calculations"
   echo
 }
 
-# Main function
+# Main execution
 main() {
+  # Handle information flags first (before dependency checks)
   for arg in "$@"; do
-    case "$arg" in
-      --help)
-        usage
+    case "${arg}" in
+      -h|--help)
+        show_usage
+        exit 0
+        ;;
+      -v|--version)
+        show_version
         exit 0
         ;;
       --explain)
@@ -490,24 +615,30 @@ main() {
     esac
   done
 
+  # Check system dependencies
   check_dependencies
 
-  local parse_result location show_hist data_source hours
-  parse_result=$(parse_args "$@")
-  IFS='|' read -r location show_hist data_source hours <<< "$parse_result"
+  # Parse command line arguments
+  local args_result location show_historical data_source forecast_hours
+  args_result=$(parse_args "$@")
+  IFS='|' read -r location show_historical data_source forecast_hours <<< "${args_result}"
 
-  local geo_data lat lon display_name
-  geo_data=$(geocode_location "$location")
-  IFS='|' read -r lat lon display_name <<< "$geo_data"
+  # Geocode location to coordinates
+  local geo_result latitude longitude location_name
+  geo_result=$(geocode_location "${location}")
+  IFS='|' read -r latitude longitude location_name <<< "${geo_result}"
 
+  # Fetch forecast data from appropriate source
   local forecast_json
-  if [[ "$data_source" == "GFZ" ]]; then
-    forecast_json=$(fetch_hp30_forecast)
+  if [[ "${data_source}" == "GFZ" ]]; then
+    forecast_json=$(fetch_gfz_hp30_forecast)
   else
-    forecast_json=$(fetch_kp_forecast)
+    forecast_json=$(fetch_noaa_kp_forecast)
   fi
 
-  display_forecast "$lat" "$lon" "$display_name" "$forecast_json" "$show_hist" "$data_source" "$hours"
+  # Display forecast results
+  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}"
 }
 
+# Script entry point
 main "$@"

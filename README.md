@@ -7,11 +7,9 @@ A CLI that retrieves the latest geomagnetic forecast data and calculates the pro
 ### Dependencies
 
 - `bash` (version 3.2+)
-- `curl` — for API requests
-- `column` — for table formatting
 - `jq` — for JSON parsing
 
-_Note: `curl` and `column` are usually pre-installed._
+_Note: The script also uses standard utilities (`curl`, `awk`, `bc`, `column`) which are pre-installed on all modern systems._
 
 #### macOS (w/ Homebrew)
 
@@ -22,7 +20,13 @@ brew install jq
 #### Ubuntu/Debian
 
 ```bash
-sudo apt-get install jq
+sudo apt install jq
+```
+
+#### Fedora/RHEL
+
+```bash
+sudo dnf install jq
 ```
 
 ### Clone
@@ -214,3 +218,7 @@ Location: Stockholm, Sweden (59.3°N)
 - GFZ Potsdam and ESA Space Weather Service Network for providing Hp30 data
 - NOAA Space Weather Prediction Center for providing Kp index data
 - OpenStreetMap for geocoding services
+
+## License
+
+MIT
