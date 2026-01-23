@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.5.0"
+readonly SCRIPT_VERSION="0.6.0"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -54,8 +54,8 @@ show_version() {
 show_usage() {
   cat >&2 <<EOF
 $(echo -e "${COLOR_BOLD}USAGE${COLOR_RESET}")
-  ${SCRIPT_NAME} [--Hp30|--GFZ] [--<hours>] [--estimate=<value>] <location>
-  ${SCRIPT_NAME} [--Kp|--NOAA] [--<hours>] [--hist] <location>
+  ${SCRIPT_NAME} [--Hp30|--GFZ] [-f,--forecast <N>] [-e,--estimate <value>] <location>
+  ${SCRIPT_NAME} [--Kp|--NOAA] [-f,--forecast <N>] [--hist] <location>
 
 $(echo -e "${COLOR_BOLD}DESCRIPTION${COLOR_RESET}")
   Display aurora visibility forecast based on geomagnetic indices and your location.
@@ -69,11 +69,11 @@ $(echo -e "${COLOR_BOLD}INDEX / DATA SOURCE OPTIONS${COLOR_RESET}")
       Use the NOAA Kp geomagnetic index (3-hour resolution).
 
 $(echo -e "${COLOR_BOLD}FORECAST SETTINGS${COLOR_RESET}")
-  --<hours>
-      Shorthand numeric flag (e.g. --12, --48) to limit forecast to next N hours.
+  -f, --forecast <N>
+      Limit forecast to next N hours.
       Values can range from 1 to 72. $(echo -e "${COLOR_BOLD}[default: 24]${COLOR_RESET}")
 
-  --estimate=<value>
+  -e, --estimate <value>
       Select which estimate to use from ensemble forecast.
       Possible values:
       • median  - Use median estimate $(echo -e "${COLOR_BOLD}[default]${COLOR_RESET}")
@@ -103,14 +103,14 @@ $(echo -e "${COLOR_BOLD}LOCATION FORMAT${COLOR_RESET}")
 
 $(echo -e "${COLOR_BOLD}NOTES${COLOR_RESET}")
   • Only one data source can be selected (GFZ Hp30 or NOAA Kp).
-  • --estimate only works when using GFZ Hp30.
+  • -e, --estimate only works when using GFZ Hp30.
   • --hist only works when using NOAA Kp.
 
 $(echo -e "${COLOR_BOLD}EXAMPLES${COLOR_RESET}")
   ${SCRIPT_NAME} "Stockholm, Sweden"
   ${SCRIPT_NAME} "68.4363°N 17.3983°E"
-  ${SCRIPT_NAME} --48 "Reykjavik, Iceland"
-  ${SCRIPT_NAME} --Kp --hist --12 "Tromsø, Norway"
+  ${SCRIPT_NAME} -f 48 "Reykjavik, Iceland"
+  ${SCRIPT_NAME} --Kp --hist --forecast 12 "Tromsø, Norway"
   ${SCRIPT_NAME} --explain
 
 EOF
@@ -275,8 +275,20 @@ parse_args() {
         data_source="NOAA"
         shift
         ;;
-      --estimate=*)
-        local estimate_value="${1#*=}"
+      -e|--estimate|--estimate=*|-e=*)
+        local estimate_value=""
+        if [[ "$1" == *=* ]]; then
+          # Handle --estimate=value or -e=value pattern
+          estimate_value="${1#*=}"
+          shift
+        elif [[ $# -gt 1 ]]; then
+          # Handle --estimate value or -e value pattern
+          shift
+          estimate_value="$1"
+          shift
+        else
+          error_exit "Option ${1} requires an argument."
+        fi
         case "${estimate_value}" in
           median)
             hp30_column="4"
@@ -291,17 +303,25 @@ parse_args() {
             error_exit "Invalid estimate value: ${estimate_value}. Must be one of: median, low, high"
             ;;
         esac
-        shift
         ;;
       --hist)
         show_historical="true"
         shift
         ;;
-      --[0-9]*)
-        # Extract hours from --<hours> format (e.g., --12, --24, --48)
-        forecast_hours="${1#--}"
+      -f|--forecast|--forecast=*|-f=*)
+        if [[ "$1" == *=* ]]; then
+          # Handle --forecast=hours or -f=hours pattern
+          forecast_hours="${1#*=}"
+          shift
+        elif [[ $# -gt 1 ]]; then
+          # Handle --forecast hours or -f hours pattern
+          shift
+          forecast_hours="$1"
+          shift
+        else
+          error_exit "Option ${1} requires an argument."
+        fi
         validate_hours "${forecast_hours}"
-        shift
         ;;
       -*)
         error_exit "Unknown option: $1\n\nRun '${SCRIPT_NAME} --help' for usage information."

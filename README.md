@@ -48,8 +48,8 @@ sudo ln -s "$(pwd)/aurora.sh" /usr/local/bin/aurora
 
 ```
 USAGE
-  aurora [--Hp30|--GFZ] [--<hours>] [--estimate=<value>] <location>
-  aurora [--Kp|--NOAA] [--<hours>] [--hist] <location>
+  aurora [--Hp30|--GFZ] [-f,--forecast <N>] [-e,--estimate <value>] <location>
+  aurora [--Kp|--NOAA] [-f,--forecast <N>] [--hist] <location>
 
 DESCRIPTION
   Display aurora visibility forecast based on geomagnetic indices and your location.
@@ -63,11 +63,11 @@ INDEX / DATA SOURCE OPTIONS
       Use the NOAA Kp geomagnetic index (3-hour resolution).
 
 FORECAST SETTINGS
-  --<hours>
-      Shorthand numeric flag (e.g. --12, --48) to limit forecast to next N hours.
+  -f, --forecast <N>
+      Limit forecast to next N hours.
       Values can range from 1 to 72. [default: 24]
 
-  --estimate=<value>
+  -e, --estimate <value>
       Select which estimate to use from ensemble forecast.
       Possible values:
       • median  - Use median estimate [default]
@@ -97,14 +97,14 @@ LOCATION FORMAT
 
 NOTES
   • Only one data source can be selected (GFZ Hp30 or NOAA Kp).
-  • --estimate only works when using GFZ Hp30.
+  • -e, --estimate only works when using GFZ Hp30.
   • --hist only works when using NOAA Kp.
 
 EXAMPLES
   aurora "Stockholm, Sweden"
   aurora "68.4363°N 17.3983°E"
-  aurora --48 "Reykjavik, Iceland"
-  aurora --Kp --hist --12 "Tromsø, Norway"
+  aurora -f 48 "Reykjavik, Iceland"
+  aurora --Kp --hist --forecast 12 "Tromsø, Norway"
   aurora --explain
 ```
 
@@ -119,7 +119,7 @@ EXAMPLES
 #### Get 12-Hour NOAA Kp Forecast
 
 ```bash
-./aurora.sh --Kp --12 "Tromsø, Norway"
+./aurora.sh --Kp -f 12 "Tromsø, Norway"
 ```
 
 #### View Detailed Index and Probability Explanation
