@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.4.0"
+readonly SCRIPT_VERSION="0.5.0"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -54,7 +54,8 @@ show_version() {
 show_usage() {
   cat >&2 <<EOF
 $(echo -e "${COLOR_BOLD}USAGE${COLOR_RESET}")
-  ${SCRIPT_NAME} [OPTIONS] <location>
+  ${SCRIPT_NAME} [--Hp30|--GFZ] [--<hours>] [--estimate=<value>] <location>
+  ${SCRIPT_NAME} [--Kp|--NOAA] [--<hours>] [--hist] <location>
 
 $(echo -e "${COLOR_BOLD}DESCRIPTION${COLOR_RESET}")
   Display aurora visibility forecast based on geomagnetic indices and your location.
@@ -67,10 +68,18 @@ $(echo -e "${COLOR_BOLD}INDEX / DATA SOURCE OPTIONS${COLOR_RESET}")
   --Kp, --NOAA
       Use the NOAA Kp geomagnetic index (3-hour resolution).
 
-$(echo -e "${COLOR_BOLD}FORECAST OPTIONS${COLOR_RESET}")
+$(echo -e "${COLOR_BOLD}FORECAST SETTINGS${COLOR_RESET}")
   --<hours>
-      Limit forecast to next N hours.
+      Shorthand numeric flag (e.g. --12, --48) to limit forecast to next N hours.
       Values can range from 1 to 72. $(echo -e "${COLOR_BOLD}[default: 24]${COLOR_RESET}")
+
+  --estimate=<value>
+      Select which estimate to use from ensemble forecast.
+      Possible values:
+      • median  - Use median estimate $(echo -e "${COLOR_BOLD}[default]${COLOR_RESET}")
+      • low     - Use minimum estimate (more conservative)
+      • high    - Use maximum estimate (more optimistic)
+      Only supported when using GFZ Hp30.
 
   --hist
       Include historical data.
@@ -86,6 +95,17 @@ $(echo -e "${COLOR_BOLD}INFORMATION OPTIONS${COLOR_RESET}")
   --explain
       Show detailed explanation of probability calculations.
 
+$(echo -e "${COLOR_BOLD}LOCATION FORMAT${COLOR_RESET}")
+  Locations can be specified as:
+  • City names: "Stockholm, Sweden" or "City, State, Country"
+  • Geographic coordinates: "68.4363°N 17.3983°E"
+  The tool will geocode your input using OpenStreetMap Nominatim.
+
+$(echo -e "${COLOR_BOLD}NOTES${COLOR_RESET}")
+  • Only one data source can be selected (GFZ Hp30 or NOAA Kp).
+  • --estimate only works when using GFZ Hp30.
+  • --hist only works when using NOAA Kp.
+
 $(echo -e "${COLOR_BOLD}EXAMPLES${COLOR_RESET}")
   ${SCRIPT_NAME} "Stockholm, Sweden"
   ${SCRIPT_NAME} "68.4363°N 17.3983°E"
@@ -93,11 +113,6 @@ $(echo -e "${COLOR_BOLD}EXAMPLES${COLOR_RESET}")
   ${SCRIPT_NAME} --Kp --hist --12 "Tromsø, Norway"
   ${SCRIPT_NAME} --explain
 
-$(echo -e "${COLOR_BOLD}LOCATION FORMAT${COLOR_RESET}")
-  Locations can be specified as:
-  • City names: "Stockholm, Sweden" or "City, State, Country"
-  • Geographic coordinates: "68.4363°N 17.3983°E"
-  The tool will geocode your input using OpenStreetMap Nominatim.
 EOF
 }
 
@@ -115,6 +130,8 @@ $(echo -e "${COLOR_CYAN}About Geomagnetic Indices:${COLOR_RESET}")
   • 30-minute resolution, suitable for short-term aurora probabilities
   • Open-ended scale — can exceed 9 during extreme storms
   • Model-driven forecast data
+  • Provides ensemble forecasts with minimum, median, and maximum estimates
+    reflecting uncertainty in the prediction model.
   • Derived from 13 globally distributed geomagnetic observatories
   • Produced by GFZ Potsdam and distributed via the ESA Space
     Weather Service Network
@@ -184,6 +201,7 @@ $(echo -e "${COLOR_CYAN}Naming:${COLOR_RESET}")
   • "p" = planetary (global average from multiple observatories)
   • "K" = Kennziffer (German: "characteristic digit")
   • "H" = hourly/half-hourly resolution
+
 EOF
 }
 
@@ -226,6 +244,7 @@ parse_args() {
   local show_historical="false"
   local data_source="GFZ"
   local forecast_hours="${DEFAULT_FORECAST_HOURS}"
+  local hp30_column="4"  # Default to median
 
   # Handle no arguments
   if [[ $# -eq 0 ]]; then
@@ -254,6 +273,24 @@ parse_args() {
         ;;
       --NOAA|--Kp)
         data_source="NOAA"
+        shift
+        ;;
+      --estimate=*)
+        local estimate_value="${1#*=}"
+        case "${estimate_value}" in
+          median)
+            hp30_column="4"
+            ;;
+          low)
+            hp30_column="2"
+            ;;
+          high)
+            hp30_column="6"
+            ;;
+          *)
+            error_exit "Invalid estimate value: ${estimate_value}. Must be one of: median, low, high"
+            ;;
+        esac
         shift
         ;;
       --hist)
@@ -290,7 +327,11 @@ parse_args() {
     error_exit "Historical data (--hist) is only available with NOAA data source (--Kp or --NOAA)."
   fi
 
-  echo "${location}|${show_historical}|${data_source}|${forecast_hours}"
+  if [[ "${hp30_column}" != "4" && "${data_source}" == "NOAA" ]]; then
+    error_exit "The --estimate option is only available with GFZ data source (--Hp30 or --GFZ)."
+  fi
+
+  echo "${location}|${show_historical}|${data_source}|${forecast_hours}|${hp30_column}"
 }
 
 # Geocode location to coordinates
@@ -346,6 +387,7 @@ fetch_noaa_kp_forecast() {
 
 # Fetch GFZ/ESA Hp30 forecast data
 fetch_gfz_hp30_forecast() {
+  local column="${1:-4}"  # Default to median (column 4)
   info "Retrieving GFZ/ESA Hp30 forecast..."
 
   local csv_data
@@ -360,15 +402,15 @@ fetch_gfz_hp30_forecast() {
   fi
 
   # Convert CSV to JSON format
-  # Skip header line and extract Time (UTC) column 1 and median column 4
+  # Skip header line and extract Time (UTC) column 1 and the selected estimate column
   local json_data
-  json_data=$(echo "${csv_data}" | tail -n +2 | awk -F',' '
+  json_data=$(echo "${csv_data}" | tail -n +2 | awk -F',' -v col="${column}" '
     BEGIN { print "[" }
     NR > 1 { print "," }
     {
       # Remove leading/trailing whitespace
       gsub(/^[ \t]+|[ \t]+$/, "", $1)
-      gsub(/^[ \t]+|[ \t]+$/, "", $4)
+      gsub(/^[ \t]+|[ \t]+$/, "", $col)
 
       # Parse date format: DD-MM-YYYY HH:MM to YYYY-MM-DD HH:MM
       split($1, datetime, " ")
@@ -380,7 +422,7 @@ fetch_gfz_hp30_forecast() {
 
       # Output JSON array format ["timestamp", value]
       formatted_time = year "-" month "-" day " " time_part
-      printf "[\"" formatted_time "\"," $4 "]"
+      printf "[\"%s\",%s]", formatted_time, $col
     }
     END { print "\n]" }
   ')
@@ -469,6 +511,7 @@ display_forecast() {
   local show_historical="${5:-false}"
   local data_source="${6:-GFZ}"
   local forecast_hours="${7:-24}"
+  local hp30_column="${8:-4}"
   local current_utc_time
 
   current_utc_time=$(date -u +"%Y-%m-%d %H:%M")
@@ -479,6 +522,17 @@ display_forecast() {
     index_name="Hp30"
   else
     index_name="Kp"
+  fi
+
+  # Determine estimate display name for GFZ source
+  local estimate_display=""
+  if [[ "${data_source}" == "GFZ" ]]; then
+    case "${hp30_column}" in
+      2) estimate_display="minimum (conservative)" ;;
+      4) estimate_display="median" ;;
+      6) estimate_display="maximum (optimistic)" ;;
+      *) estimate_display="median" ;;
+    esac
   fi
 
   # Calculate maximum forecast entries based on resolution
@@ -566,6 +620,9 @@ display_forecast() {
   echo -e "  ${COLOR_CYAN}Location:${COLOR_RESET}      ${location_name}"
   echo -e "  ${COLOR_CYAN}Coordinates:${COLOR_RESET}   ${latitude}°, ${longitude}°"
   echo -e "  ${COLOR_CYAN}Data Source:${COLOR_RESET}   ${data_source} ${index_name}"
+  if [[ -n "${estimate_display}" ]]; then
+    echo -e "  ${COLOR_CYAN}Estimate:${COLOR_RESET}      ${estimate_display}"
+  fi
   echo -e "  ${COLOR_CYAN}Forecast Time:${COLOR_RESET} ${current_utc_time} UTC"
   echo
   echo -e "  ${COLOR_BOLD}Note:${COLOR_RESET} Each degree above minimum latitude adds ~${PROBABILITY_INCREMENT_PER_DEGREE}% visibility probability"
@@ -637,9 +694,9 @@ main() {
   check_dependencies
 
   # Parse command line arguments
-  local args_result location show_historical data_source forecast_hours
+  local args_result location show_historical data_source forecast_hours hp30_column
   args_result=$(parse_args "$@")
-  IFS='|' read -r location show_historical data_source forecast_hours <<< "${args_result}"
+  IFS='|' read -r location show_historical data_source forecast_hours hp30_column <<< "${args_result}"
 
   # Geocode location to coordinates
   local geo_result latitude longitude location_name
@@ -649,13 +706,13 @@ main() {
   # Fetch forecast data from appropriate source
   local forecast_json
   if [[ "${data_source}" == "GFZ" ]]; then
-    forecast_json=$(fetch_gfz_hp30_forecast)
+    forecast_json=$(fetch_gfz_hp30_forecast "${hp30_column}")
   else
     forecast_json=$(fetch_noaa_kp_forecast)
   fi
 
   # Display forecast results
-  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}"
+  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}" "${hp30_column}"
 }
 
 # Script entry point

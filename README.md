@@ -48,7 +48,8 @@ sudo ln -s "$(pwd)/aurora.sh" /usr/local/bin/aurora
 
 ```
 USAGE
-  aurora [OPTIONS] <location>
+  aurora [--Hp30|--GFZ] [--<hours>] [--estimate=<value>] <location>
+  aurora [--Kp|--NOAA] [--<hours>] [--hist] <location>
 
 DESCRIPTION
   Display aurora visibility forecast based on geomagnetic indices and your location.
@@ -61,10 +62,18 @@ INDEX / DATA SOURCE OPTIONS
   --Kp, --NOAA
       Use the NOAA Kp geomagnetic index (3-hour resolution).
 
-FORECAST OPTIONS
+FORECAST SETTINGS
   --<hours>
-      Limit forecast to next N hours.
+      Shorthand numeric flag (e.g. --12, --48) to limit forecast to next N hours.
       Values can range from 1 to 72. [default: 24]
+
+  --estimate=<value>
+      Select which estimate to use from ensemble forecast.
+      Possible values:
+      • median  - Use median estimate [default]
+      • low     - Use minimum estimate (more conservative)
+      • high    - Use maximum estimate (more optimistic)
+      Only supported when using GFZ Hp30.
 
   --hist
       Include historical data.
@@ -80,18 +89,23 @@ INFORMATION OPTIONS
   --explain
       Show detailed explanation of probability calculations.
 
+LOCATION FORMAT
+  Locations can be specified as:
+  • City names: "Stockholm, Sweden" or "City, State, Country"
+  • Geographic coordinates: "68.4363°N 17.3983°E"
+  The tool will geocode your input using OpenStreetMap Nominatim.
+
+NOTES
+  • Only one data source can be selected (GFZ Hp30 or NOAA Kp).
+  • --estimate only works when using GFZ Hp30.
+  • --hist only works when using NOAA Kp.
+
 EXAMPLES
   aurora "Stockholm, Sweden"
   aurora "68.4363°N 17.3983°E"
   aurora --48 "Reykjavik, Iceland"
   aurora --Kp --hist --12 "Tromsø, Norway"
   aurora --explain
-
-LOCATION FORMAT
-  Locations can be specified as:
-  • City names: "Stockholm, Sweden" or "City, State, Country"
-  • Geographic coordinates: "68.4363°N 17.3983°E"
-  The tool will geocode your input using OpenStreetMap Nominatim.
 ```
 
 ### Examples
@@ -126,12 +140,13 @@ LOCATION FORMAT
   Location:      Stockholm, Stockholms kommun, Stockholms län, 111 29, Sverige
   Coordinates:   59.33°, 18.07°
   Data Source:   GFZ Hp30
+  Estimate:      median
   Forecast Time: 2026-01-22 23:27 UTC
 
   Note: Each degree above minimum latitude adds ~20% visibility probability
 
 Time_(UTC)        Hp30  Min_Lat  Probability  Outlook
-2026-01-22 23:30  4     ≥62°     0%           None
+2026-01-22 23:30  4     ≥62°     0%        s   None
 2026-01-23 00:00  4     ≥62°     0%           None
 2026-01-23 00:30  4     ≥62°     0%           None
 2026-01-23 01:00  3.67  ≥62°     0%           None
@@ -157,6 +172,7 @@ This tool supports two planetary geomagnetic activity indices:
 - **30-minute resolution** for detailed short-term forecasting
 - **Open-ended scale** — can exceed 9 during extreme storms
 - **Model-driven** forecast data
+- Provides ensemble forecasts with minimum, median, and maximum estimates reflecting uncertainty in the prediction model.
 - Derived from **13 globally distributed geomagnetic observatories**
 - **Produced by GFZ Potsdam** and distributed via ESA Space Weather Service Network
 
