@@ -205,14 +205,14 @@ _Source: [NOAA Space Weather Prediction Center - Tips on Viewing Aurora](https:/
 ### Probability Calculation
 
 For each forecast period:
-1. Your location's latitude is compared to the minimum latitude for the forecasted Kp
-2. If your latitude is below the minimum → 0% probability
+1. Your location's absolute latitude is compared to the minimum latitude for the forecasted Kp
+2. If your absolute latitude is below the minimum → 0% probability
 3. For each degree above minimum → +20% visibility probability
 4. Maximum probability caps at 100%
 
 #### Formula
 
-`Probability = min(100, max(0, (Your_Latitude - Min_Latitude) × 20))`
+`Probability = min(100, max(0, (|Your_Latitude| - Min_Latitude) × 20))`
 
 #### Example
 
