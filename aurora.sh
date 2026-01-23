@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.7.0"
+readonly SCRIPT_VERSION="0.7.1"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -28,13 +28,13 @@ readonly PROBABILITY_INCREMENT_PER_DEGREE=20
 
 # Color codes (disabled if not in TTY)
 if [[ -t 1 ]]; then
-  readonly COLOR_RESET='\033[0m'
-  readonly COLOR_BOLD='\033[1m'
-  readonly COLOR_RED='\033[0;31m'
-  readonly COLOR_GREEN='\033[0;32m'
-  readonly COLOR_YELLOW='\033[0;33m'
-  readonly COLOR_BLUE='\033[0;34m'
-  readonly COLOR_CYAN='\033[0;36m'
+  readonly COLOR_RESET=$'\033[0m'
+  readonly COLOR_BOLD=$'\033[1m'
+  readonly COLOR_RED=$'\033[0;31m'
+  readonly COLOR_GREEN=$'\033[0;32m'
+  readonly COLOR_YELLOW=$'\033[0;33m'
+  readonly COLOR_BLUE=$'\033[0;34m'
+  readonly COLOR_CYAN=$'\033[0;36m'
 else
   readonly COLOR_RESET=''
   readonly COLOR_BOLD=''
@@ -214,7 +214,7 @@ error_exit() {
   local message="$1"
   local exit_code="${2:-1}"
   echo -e "${COLOR_RED}Error:${COLOR_RESET} ${message}" >&2
-  exit "${exit_code}"
+  exit ${exit_code}
 }
 
 # Info output
@@ -234,10 +234,10 @@ check_dependencies() {
 # Validate hours parameter
 validate_hours() {
   local hours="$1"
-  if [[ ! "${hours}" =~ ^[0-9]+$ ]]; then
+  if [[ ! ${hours} =~ ^[0-9]+$ ]]; then
     error_exit "Invalid hours value: ${hours}. Must be a positive integer."
   fi
-  if [[ ${hours} -lt 1 || ${hours} -gt 72 ]]; then
+  if ((hours < 1 || hours > 72)); then
     error_exit "Hours must be between 1 and 72. Got: ${hours}"
   fi
 }
@@ -342,7 +342,7 @@ parse_args() {
           error_exit "Option ${1} requires an argument."
         fi
         # Validate magnitude value
-        if [[ ! "${min_magnitude}" =~ ^[0-9]+$ ]] || [[ ${min_magnitude} -lt 0 ]]; then
+        if [[ ! ${min_magnitude} =~ ^[0-9]+$ ]] || ((min_magnitude < 0)); then
           error_exit "Invalid magnitude value: ${min_magnitude}. Must be >= 0."
         fi
         ;;
@@ -399,7 +399,7 @@ geocode_location() {
   display_name=$(echo "${geo_json}" | jq -r '.[0].display_name // empty')
 
   # Validate geocoding results
-  if [[ -z "${lat}" || -z "${lon}" ]]; then
+  if [[ -z ${lat} || -z ${lon} ]]; then
     error_exit "Location not found: ${location}\n\nTry using a more specific format:\n  • City, Country (e.g., 'Stockholm, Sweden')\n  • City, State, Country (e.g., 'Portland, Oregon, USA')"
   fi
 
@@ -506,43 +506,70 @@ get_minimum_latitude() {
 calculate_visibility_probability() {
   local latitude="$1"
   local min_latitude="$2"
-  local lat_diff
   local probability
 
   # Use absolute value of latitude (works for both hemispheres)
-  latitude=$(echo "${latitude}" | awk '{print ($1 < 0) ? -$1 : $1}')
+  latitude=$(awk -v lat="${latitude}" 'BEGIN {print (lat < 0) ? -lat : lat}')
 
-  # Calculate latitude difference
-  lat_diff=$(echo "${latitude} - ${min_latitude}" | bc)
+  # Calculate latitude difference and probability using awk for floating point
+  probability=$(awk -v lat="${latitude}" -v min_lat="${min_latitude}" -v incr="${PROBABILITY_INCREMENT_PER_DEGREE}" '
+    BEGIN {
+      diff = lat - min_lat
+      prob = int(diff * incr)
+      if (prob < 0) prob = 0
+      else if (prob > 100) prob = 100
+      print prob
+    }
+  ')
 
-  # Calculate probability: 0% if below threshold, +20% per degree above
-  probability=$(echo "${lat_diff} * ${PROBABILITY_INCREMENT_PER_DEGREE}" | bc | cut -d'.' -f1)
-
-  # Clamp between 0 and 100
-  if [[ ${probability} -lt 0 ]]; then
-    echo "0"
-  elif [[ ${probability} -gt 100 ]]; then
-    echo "100"
-  else
-    echo "${probability}"
-  fi
+  echo "${probability}"
 }
 
 # Get outlook category based on probability
 get_outlook_category() {
   local probability="$1"
 
-  if [[ ${probability} -eq 0 ]]; then
+  if ((probability == 0)); then
     echo "None"
-  elif [[ ${probability} -le 20 ]]; then
+  elif ((probability <= 20)); then
     echo "Low"
-  elif [[ ${probability} -le 50 ]]; then
+  elif ((probability <= 50)); then
     echo "Fair"
-  elif [[ ${probability} -le 75 ]]; then
+  elif ((probability <= 75)); then
     echo "Good"
   else
     echo "Excellent"
   fi
+}
+
+# Generate jq filter to enrich data with min_lat and probability
+# This filter adds calculated fields based on geomagnetic index
+build_enrichment_jq_filter() {
+  cat <<'JQ_FILTER'
+| map(. + {
+    min_lat: (
+      (.index | round) as $rounded |
+      if $rounded >= 9 then 48
+      elif $rounded == 8 then 51
+      elif $rounded == 7 then 54
+      elif $rounded == 6 then 57
+      elif $rounded == 5 then 60
+      elif $rounded == 4 then 62
+      elif $rounded == 3 then 64
+      elif $rounded == 2 then 65
+      elif $rounded == 1 then 66
+      else 67 end
+    )
+  })
+| map(. + {
+    prob: (
+      (($lat | tonumber | fabs) - .min_lat) as $diff
+      | if $diff <= 0 then 0
+        else (($diff * 20) | if . > 100 then 100 else . end | floor)
+        end
+    )
+  })
+JQ_FILTER
 }
 
 # Display aurora forecast
@@ -562,7 +589,7 @@ display_forecast() {
 
   # Determine index name for display
   local index_name
-  if [[ "${data_source}" == "GFZ" ]]; then
+  if [[ ${data_source} == "GFZ" ]]; then
     index_name="Hp30"
   else
     index_name="Kp"
@@ -581,48 +608,25 @@ display_forecast() {
 
   # Calculate maximum forecast entries based on resolution
   local max_forecast_entries
-  if [[ "${data_source}" == "GFZ" ]]; then
+  if [[ ${data_source} == "GFZ" ]]; then
     # GFZ: 30-minute resolution = 2 entries per hour
     max_forecast_entries=$((forecast_hours * 2))
   else
     # NOAA: 3-hour resolution = 1 entry per 3 hours
-    max_forecast_entries=$(( (forecast_hours + 2) / 3 ))
+    max_forecast_entries=$(((forecast_hours + 2) / 3))
   fi
 
   # Process historical data if requested
   local historical_data=""
-  if [[ "${show_historical}" == "true" ]]; then
+  if [[ ${show_historical} == "true" ]]; then
     local hist_jq_filter='.[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time < $now))'
 
     # Apply magnitude filter if specified (> 0)
-    if [[ -n "${min_magnitude}" ]] && [[ ${min_magnitude} -gt 0 ]]; then
+    if [[ -n ${min_magnitude} ]] && ((min_magnitude > 0)); then
       hist_jq_filter="${hist_jq_filter} | map(select(.index >= ${min_magnitude}))"
     fi
 
-    hist_jq_filter="${hist_jq_filter} | sort_by(.time) | .[-\$max_hist:]
-      | map(. + {
-          min_lat: (
-            (.index | round) as \$rounded |
-            if \$rounded >= 9 then 48
-            elif \$rounded == 8 then 51
-            elif \$rounded == 7 then 54
-            elif \$rounded == 6 then 57
-            elif \$rounded == 5 then 60
-            elif \$rounded == 4 then 62
-            elif \$rounded == 3 then 64
-            elif \$rounded == 2 then 65
-            elif \$rounded == 1 then 66
-            else 67 end
-          )
-        })
-      | map(. + {
-          prob: (
-            ((\$lat | tonumber | fabs) - .min_lat) as \$diff
-            | if \$diff <= 0 then 0
-              else ((\$diff * 20) | if . > 100 then 100 else . end | floor)
-              end
-          )
-        })"
+    hist_jq_filter="${hist_jq_filter} | sort_by(.time) | .[-\$max_hist:]$(build_enrichment_jq_filter)"
 
     historical_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_hist "${MAX_HISTORICAL_ENTRIES}" "${hist_jq_filter}")
   fi
@@ -632,34 +636,11 @@ display_forecast() {
   local jq_filter='.[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time >= $now))'
 
   # Apply magnitude filter if specified (> 0)
-  if [[ -n "${min_magnitude}" ]] && [[ ${min_magnitude} -gt 0 ]]; then
+  if [[ -n ${min_magnitude} ]] && ((min_magnitude > 0)); then
     jq_filter="${jq_filter} | map(select(.index >= ${min_magnitude}))"
   fi
 
-  jq_filter="${jq_filter} | .[0:\$max_entries]
-    | map(. + {
-        min_lat: (
-          (.index | round) as \$rounded |
-          if \$rounded >= 9 then 48
-          elif \$rounded == 8 then 51
-          elif \$rounded == 7 then 54
-          elif \$rounded == 6 then 57
-          elif \$rounded == 5 then 60
-          elif \$rounded == 4 then 62
-          elif \$rounded == 3 then 64
-          elif \$rounded == 2 then 65
-          elif \$rounded == 1 then 66
-          else 67 end
-        )
-      })
-    | map(. + {
-        prob: (
-          ((\$lat | tonumber | fabs) - .min_lat) as \$diff
-          | if \$diff <= 0 then 0
-            else ((\$diff * 20) | if . > 100 then 100 else . end | floor)
-            end
-        )
-      })"
+  jq_filter="${jq_filter} | .[0:\$max_entries]$(build_enrichment_jq_filter)"
 
   forecast_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_entries "${max_forecast_entries}" "${jq_filter}")
 
@@ -686,7 +667,7 @@ display_forecast() {
     echo -e "Time_(UTC)\t${index_name}\tMin_Lat\tProbability\tOutlook"
 
     # Show historical data if available
-    if [[ "${show_historical}" == "true" && -n "${historical_data}" ]]; then
+    if [[ ${show_historical} == "true" && -n ${historical_data} ]]; then
       echo "${historical_data}" | jq -r '
         .[] |
         (if .prob == 0 then "None"
@@ -769,7 +750,7 @@ main() {
 
   # Fetch forecast data from appropriate source
   local forecast_json
-  if [[ "${data_source}" == "GFZ" ]]; then
+  if [[ ${data_source} == "GFZ" ]]; then
     forecast_json=$(fetch_gfz_hp30_forecast "${hp30_column}")
   else
     forecast_json=$(fetch_noaa_kp_forecast)
