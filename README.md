@@ -48,8 +48,8 @@ sudo ln -s "$(pwd)/aurora.sh" /usr/local/bin/aurora
 
 ```
 USAGE
-  aurora [--Hp30|--GFZ] [-f,--forecast <N>] [-e,--estimate <value>] <location>
-  aurora [--Kp|--NOAA] [-f,--forecast <N>] [--hist] <location>
+  aurora [--Hp30|--GFZ] [-f,--forecast <N>] [-m,--magnitude <M>] [-e,--estimate <value>] <location>
+  aurora [--Kp|--NOAA] [-f,--forecast <N>] [-m,--magnitude <M>] [--hist] <location>
 
 DESCRIPTION
   Display aurora visibility forecast based on geomagnetic indices and your location.
@@ -66,6 +66,10 @@ FORECAST SETTINGS
   -f, --forecast <N>
       Limit forecast to next N hours.
       Values can range from 1 to 72. [default: 24]
+
+  -m, --magnitude <M>
+      Filter forecast to show only periods with magnitude ≥ M value.
+      Minimum is 0, but the data is open-ended. [default: 0]
 
   -e, --estimate <value>
       Select which estimate to use from ensemble forecast.
@@ -141,21 +145,22 @@ EXAMPLES
   Coordinates:   59.33°, 18.07°
   Data Source:   GFZ Hp30
   Estimate:      median
-  Forecast Time: 2026-01-22 23:27 UTC
+  Magnitude:     ≥0
+  Forecast Time: 2026-01-23 22:53 UTC
 
   Note: Each degree above minimum latitude adds ~20% visibility probability
 
-Time_(UTC)        Hp30  Min_Lat  Probability  Outlook
-2026-01-22 23:30  4     ≥62°     0%        s   None
-2026-01-23 00:00  4     ≥62°     0%           None
-2026-01-23 00:30  4     ≥62°     0%           None
-2026-01-23 01:00  3.67  ≥62°     0%           None
-2026-01-23 01:30  3.67  ≥62°     0%           None
-2026-01-23 02:00  4     ≥62°     0%           None
-2026-01-23 02:30  3.67  ≥62°     0%           None
-2026-01-23 03:00  3.67  ≥62°     0%           None
-2026-01-23 03:30  3.67  ≥62°     0%           None
-2026-01-23 04:00  3.67  ≥62°     0%           None
+Time_(UTC)        Hp30   Min_Lat  Probability  Outlook
+2026-01-23 23:00   3.67  ≥62°       0%         None
+2026-01-23 23:30   3.33  ≥64°       0%         None
+2026-01-24 00:00   3.33  ≥64°       0%         None
+2026-01-24 00:30   3.33  ≥64°       0%         None
+2026-01-24 01:00   3.33  ≥64°       0%         None
+2026-01-24 01:30   3.33  ≥64°       0%         None
+2026-01-24 02:00   3     ≥64°       0%         None
+2026-01-24 02:30   3     ≥64°       0%         None
+2026-01-24 03:00   3     ≥64°       0%         None
+2026-01-24 03:30   3     ≥64°       0%         None
 ...
 
   Tip: Run 'aurora --explain' for detailed probability calculations

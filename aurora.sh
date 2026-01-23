@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.6.0"
+readonly SCRIPT_VERSION="0.7.0"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -54,8 +54,8 @@ show_version() {
 show_usage() {
   cat >&2 <<EOF
 $(echo -e "${COLOR_BOLD}USAGE${COLOR_RESET}")
-  ${SCRIPT_NAME} [--Hp30|--GFZ] [-f,--forecast <N>] [-e,--estimate <value>] <location>
-  ${SCRIPT_NAME} [--Kp|--NOAA] [-f,--forecast <N>] [--hist] <location>
+  ${SCRIPT_NAME} [--Hp30|--GFZ] [-f,--forecast <N>] [-m,--magnitude <M>] [-e,--estimate <value>] <location>
+  ${SCRIPT_NAME} [--Kp|--NOAA] [-f,--forecast <N>] [-m,--magnitude <M>] [--hist] <location>
 
 $(echo -e "${COLOR_BOLD}DESCRIPTION${COLOR_RESET}")
   Display aurora visibility forecast based on geomagnetic indices and your location.
@@ -72,6 +72,10 @@ $(echo -e "${COLOR_BOLD}FORECAST SETTINGS${COLOR_RESET}")
   -f, --forecast <N>
       Limit forecast to next N hours.
       Values can range from 1 to 72. $(echo -e "${COLOR_BOLD}[default: 24]${COLOR_RESET}")
+
+  -m, --magnitude <M>
+      Filter forecast to show only periods with magnitude ≥ M value.
+      Minimum is 0, but the data is open-ended. $(echo -e "${COLOR_BOLD}[default: 0]${COLOR_RESET}")
 
   -e, --estimate <value>
       Select which estimate to use from ensemble forecast.
@@ -245,6 +249,7 @@ parse_args() {
   local data_source="GFZ"
   local forecast_hours="${DEFAULT_FORECAST_HOURS}"
   local hp30_column="4"  # Default to median
+  local min_magnitude="0"  # Default: no filtering (show all)
 
   # Handle no arguments
   if [[ $# -eq 0 ]]; then
@@ -323,6 +328,24 @@ parse_args() {
         fi
         validate_hours "${forecast_hours}"
         ;;
+      -m|--magnitude|--magnitude=*|-m=*)
+        if [[ "$1" == *=* ]]; then
+          # Handle --magnitude=value or -m=value pattern
+          min_magnitude="${1#*=}"
+          shift
+        elif [[ $# -gt 1 ]]; then
+          # Handle --magnitude value or -m value pattern
+          shift
+          min_magnitude="$1"
+          shift
+        else
+          error_exit "Option ${1} requires an argument."
+        fi
+        # Validate magnitude value
+        if [[ ! "${min_magnitude}" =~ ^[0-9]+$ ]] || [[ ${min_magnitude} -lt 0 ]]; then
+          error_exit "Invalid magnitude value: ${min_magnitude}. Must be >= 0."
+        fi
+        ;;
       -*)
         error_exit "Unknown option: $1\n\nRun '${SCRIPT_NAME} --help' for usage information."
         ;;
@@ -351,7 +374,7 @@ parse_args() {
     error_exit "The --estimate option is only available with GFZ data source (--Hp30 or --GFZ)."
   fi
 
-  echo "${location}|${show_historical}|${data_source}|${forecast_hours}|${hp30_column}"
+  echo "${location}|${show_historical}|${data_source}|${forecast_hours}|${hp30_column}|${min_magnitude}"
 }
 
 # Geocode location to coordinates
@@ -532,6 +555,7 @@ display_forecast() {
   local data_source="${6:-GFZ}"
   local forecast_hours="${7:-24}"
   local hp30_column="${8:-4}"
+  local min_magnitude="${9:-}"
   local current_utc_time
 
   current_utc_time=$(date -u +"%Y-%m-%d %H:%M")
@@ -568,69 +592,76 @@ display_forecast() {
   # Process historical data if requested
   local historical_data=""
   if [[ "${show_historical}" == "true" ]]; then
-    historical_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_hist "${MAX_HISTORICAL_ENTRIES}" '
-      .[1:]
-      | map({time: .[0], index: (.[1] | tonumber)})
-      | map(select(.time < $now))
-      | sort_by(.time)
-      | .[-$max_hist:]
+    local hist_jq_filter='.[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time < $now))'
+
+    # Apply magnitude filter if specified (> 0)
+    if [[ -n "${min_magnitude}" ]] && [[ ${min_magnitude} -gt 0 ]]; then
+      hist_jq_filter="${hist_jq_filter} | map(select(.index >= ${min_magnitude}))"
+    fi
+
+    hist_jq_filter="${hist_jq_filter} | sort_by(.time) | .[-\$max_hist:]
       | map(. + {
           min_lat: (
-            (.index | round) as $rounded |
-            if $rounded >= 9 then 48
-            elif $rounded == 8 then 51
-            elif $rounded == 7 then 54
-            elif $rounded == 6 then 57
-            elif $rounded == 5 then 60
-            elif $rounded == 4 then 62
-            elif $rounded == 3 then 64
-            elif $rounded == 2 then 65
-            elif $rounded == 1 then 66
+            (.index | round) as \$rounded |
+            if \$rounded >= 9 then 48
+            elif \$rounded == 8 then 51
+            elif \$rounded == 7 then 54
+            elif \$rounded == 6 then 57
+            elif \$rounded == 5 then 60
+            elif \$rounded == 4 then 62
+            elif \$rounded == 3 then 64
+            elif \$rounded == 2 then 65
+            elif \$rounded == 1 then 66
             else 67 end
           )
         })
       | map(. + {
           prob: (
-            (($lat | tonumber | fabs) - .min_lat) as $diff
-            | if $diff <= 0 then 0
-              else (($diff * 20) | if . > 100 then 100 else . end | floor)
+            ((\$lat | tonumber | fabs) - .min_lat) as \$diff
+            | if \$diff <= 0 then 0
+              else ((\$diff * 20) | if . > 100 then 100 else . end | floor)
               end
           )
-        })
-    ')
+        })"
+
+    historical_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_hist "${MAX_HISTORICAL_ENTRIES}" "${hist_jq_filter}")
   fi
 
   # Process forecast data
   local forecast_data
-  forecast_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_entries "${max_forecast_entries}" '
-    .[1:]
-    | map({time: .[0], index: (.[1] | tonumber)})
-    | map(select(.time >= $now))
-    | .[0:$max_entries]
+  local jq_filter='.[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time >= $now))'
+
+  # Apply magnitude filter if specified (> 0)
+  if [[ -n "${min_magnitude}" ]] && [[ ${min_magnitude} -gt 0 ]]; then
+    jq_filter="${jq_filter} | map(select(.index >= ${min_magnitude}))"
+  fi
+
+  jq_filter="${jq_filter} | .[0:\$max_entries]
     | map(. + {
         min_lat: (
-          (.index | round) as $rounded |
-          if $rounded >= 9 then 48
-          elif $rounded == 8 then 51
-          elif $rounded == 7 then 54
-          elif $rounded == 6 then 57
-          elif $rounded == 5 then 60
-          elif $rounded == 4 then 62
-          elif $rounded == 3 then 64
-          elif $rounded == 2 then 65
-          elif $rounded == 1 then 66
+          (.index | round) as \$rounded |
+          if \$rounded >= 9 then 48
+          elif \$rounded == 8 then 51
+          elif \$rounded == 7 then 54
+          elif \$rounded == 6 then 57
+          elif \$rounded == 5 then 60
+          elif \$rounded == 4 then 62
+          elif \$rounded == 3 then 64
+          elif \$rounded == 2 then 65
+          elif \$rounded == 1 then 66
           else 67 end
         )
       })
     | map(. + {
         prob: (
-          (($lat | tonumber | fabs) - .min_lat) as $diff
-          | if $diff <= 0 then 0
-            else (($diff * 20) | if . > 100 then 100 else . end | floor)
+          ((\$lat | tonumber | fabs) - .min_lat) as \$diff
+          | if \$diff <= 0 then 0
+            else ((\$diff * 20) | if . > 100 then 100 else . end | floor)
             end
         )
-      })
-  ')
+      })"
+
+  forecast_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_entries "${max_forecast_entries}" "${jq_filter}")
 
   # Display header
   echo
@@ -643,6 +674,7 @@ display_forecast() {
   if [[ -n "${estimate_display}" ]]; then
     echo -e "  ${COLOR_CYAN}Estimate:${COLOR_RESET}      ${estimate_display}"
   fi
+  echo -e "  ${COLOR_CYAN}Magnitude:${COLOR_RESET}     ≥${min_magnitude}"
   echo -e "  ${COLOR_CYAN}Forecast Time:${COLOR_RESET} ${current_utc_time} UTC"
   echo
   echo -e "  ${COLOR_BOLD}Note:${COLOR_RESET} Each degree above minimum latitude adds ~${PROBABILITY_INCREMENT_PER_DEGREE}% visibility probability"
@@ -662,7 +694,13 @@ display_forecast() {
          elif .prob <= 50 then "Fair"
          elif .prob <= 75 then "Good"
          else "Excellent" end) as $outlook |
-        "\(.time)\t\(.index | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob)%\t\($outlook)"
+        (.index | . * 100 | round / 100) as $idx |
+        (if $idx < 10 then " " + ($idx | tostring) else ($idx | tostring) end) as $padded_idx |
+        (.prob | tostring) as $prob_str |
+        (if .prob < 10 then "  " + $prob_str elif .prob < 100 then " " + $prob_str else $prob_str end) as $padded_prob |
+        (.min_lat | tostring) as $lat_str |
+        (if .min_lat < 10 then " " + $lat_str else $lat_str end) as $padded_lat |
+        "\(.time)\t\($padded_idx)\t≥\($padded_lat)°\t\($padded_prob)%\t\($outlook)"
       '
       # Separator between historical and forecast
       echo -e "━━━━━ PRESENT ━━━━━\t\t\t\t"
@@ -676,7 +714,13 @@ display_forecast() {
        elif .prob <= 50 then "Fair"
        elif .prob <= 75 then "Good"
        else "Excellent" end) as $outlook |
-      "\(.time)\t\(.index | . * 100 | round / 100)\t≥\(.min_lat)°\t\(.prob)%\t\($outlook)"
+      (.index | . * 100 | round / 100) as $idx |
+      (if $idx < 10 then " " + ($idx | tostring) else ($idx | tostring) end) as $padded_idx |
+      (.prob | tostring) as $prob_str |
+      (if .prob < 10 then "  " + $prob_str elif .prob < 100 then " " + $prob_str else $prob_str end) as $padded_prob |
+      (.min_lat | tostring) as $lat_str |
+      (if .min_lat < 10 then " " + $lat_str else $lat_str end) as $padded_lat |
+      "\(.time)\t\($padded_idx)\t≥\($padded_lat)°\t\($padded_prob)%\t\($outlook)"
     '
   } | column -t -s $'\t' \
     | awk -v bold="${COLOR_BOLD}" -v reset="${COLOR_RESET}" '
@@ -714,9 +758,9 @@ main() {
   check_dependencies
 
   # Parse command line arguments
-  local args_result location show_historical data_source forecast_hours hp30_column
+  local args_result location show_historical data_source forecast_hours hp30_column min_magnitude
   args_result=$(parse_args "$@")
-  IFS='|' read -r location show_historical data_source forecast_hours hp30_column <<< "${args_result}"
+  IFS='|' read -r location show_historical data_source forecast_hours hp30_column min_magnitude <<< "${args_result}"
 
   # Geocode location to coordinates
   local geo_result latitude longitude location_name
@@ -732,7 +776,7 @@ main() {
   fi
 
   # Display forecast results
-  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}" "${hp30_column}"
+  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}" "${hp30_column}" "${min_magnitude}"
 }
 
 # Script entry point
