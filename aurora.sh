@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.7.1"
+readonly SCRIPT_VERSION="0.7.2"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -250,6 +250,7 @@ parse_args() {
   local forecast_hours="${DEFAULT_FORECAST_HOURS}"
   local hp30_column="4"  # Default to median
   local min_magnitude="0"  # Default: no filtering (show all)
+  local estimate_used="false"  # Track if --estimate flag was explicitly used
 
   # Handle no arguments
   if [[ $# -eq 0 ]]; then
@@ -281,6 +282,7 @@ parse_args() {
         shift
         ;;
       -e|--estimate|--estimate=*|-e=*)
+        estimate_used="true"
         local estimate_value=""
         if [[ "$1" == *=* ]]; then
           # Handle --estimate=value or -e=value pattern
@@ -370,7 +372,7 @@ parse_args() {
     error_exit "Historical data (--hist) is only available with NOAA data source (--Kp or --NOAA)."
   fi
 
-  if [[ "${hp30_column}" != "4" && "${data_source}" == "NOAA" ]]; then
+  if [[ "${estimate_used}" == "true" && "${data_source}" == "NOAA" ]]; then
     error_exit "The --estimate option is only available with GFZ data source (--Hp30 or --GFZ)."
   fi
 
