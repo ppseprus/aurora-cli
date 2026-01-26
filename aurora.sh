@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.8.0"
+readonly SCRIPT_VERSION="0.9.0"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -121,6 +121,11 @@ $(echo -e "${COLOR_BOLD}FORECAST SETTINGS${COLOR_RESET}")
   --hist
       Include historical data.
       Only supported when using NOAA Kp as data source.
+
+$(echo -e "${COLOR_BOLD}OUTPUT OPTIONS${COLOR_RESET}")
+  --raw
+      Suppress informational output and formatting.
+      Outputs only forecast data in a machine-readable format suitable for scripting and pipelines.
 
 $(echo -e "${COLOR_BOLD}INFORMATION OPTIONS${COLOR_RESET}")
   -h, --help
@@ -274,6 +279,18 @@ validate_hours() {
   fi
 }
 
+# Check if forecast data has results and return appropriate status
+check_forecast_results() {
+  local forecast_data="$1"
+  local result_count
+  result_count=$(echo "${forecast_data}" | jq -r 'length')
+  if [[ "${result_count}" -gt 0 ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # Parse command line arguments
 parse_args() {
   local location=""
@@ -283,6 +300,7 @@ parse_args() {
   local hp30_column="4"  # Default to median
   local min_magnitude="0"  # Default: no filtering (show all)
   local estimate_used="false"  # Track if --estimate flag was explicitly used
+  local is_raw="false"  # Track if --raw flag is used
 
   # Handle no arguments
   if [[ $# -eq 0 ]]; then
@@ -304,6 +322,10 @@ parse_args() {
       --explain)
         explain
         exit 0
+        ;;
+      --raw)
+        is_raw="true"
+        shift
         ;;
       --GFZ|--Hp30)
         data_source="GFZ"
@@ -408,7 +430,7 @@ parse_args() {
     error_exit "${EXIT_INCOMPATIBLE_OPTIONS}" "The --estimate option is only available with GFZ data source (--Hp30 or --GFZ)."
   fi
 
-  echo "${location}|${show_historical}|${data_source}|${forecast_hours}|${hp30_column}|${min_magnitude}"
+  echo "${location}|${show_historical}|${data_source}|${forecast_hours}|${hp30_column}|${min_magnitude}|${is_raw}"
 }
 
 # Handle API response errors and extract response body
@@ -450,7 +472,9 @@ geocode_location() {
   local geo_json
   local lat lon display_name
 
-  info "Fetching coordinates for: ${COLOR_BOLD}${location}${COLOR_RESET}"
+  if [[ "${is_raw}" != "true" ]]; then
+    info "Fetching coordinates for: ${COLOR_BOLD}${location}${COLOR_RESET}"
+  fi
 
   local response
   response=$(curl -sf -w "\n%{http_code}" \
@@ -484,7 +508,9 @@ geocode_location() {
 
 # Fetch NOAA Kp forecast data
 fetch_noaa_kp_forecast() {
-  info "Retrieving NOAA Planetary Kp-index forecast..."
+  if [[ "${is_raw}" != "true" ]]; then
+    info "Retrieving NOAA Planetary Kp-index forecast..."
+  fi
 
   local response
   response=$(curl -sf -w "\n%{http_code}" \
@@ -508,7 +534,9 @@ fetch_noaa_kp_forecast() {
 # Fetch GFZ/ESA Hp30 forecast data
 fetch_gfz_hp30_forecast() {
   local column="${1:-4}"  # Default to median (column 4)
-  info "Retrieving GFZ/ESA Hp30 forecast..."
+  if [[ "${is_raw}" != "true" ]]; then
+    info "Retrieving GFZ/ESA Hp30 forecast..."
+  fi
 
   local response
   response=$(curl -sf -w "\n%{http_code}" \
@@ -665,6 +693,7 @@ display_forecast() {
   local forecast_hours="${7:-24}"
   local hp30_column="${8:-4}"
   local min_magnitude="${9:-}"
+  local is_raw="${10:-false}"
   local current_utc_time
 
   current_utc_time=$(date -u +"%Y-%m-%d %H:%M")
@@ -725,6 +754,22 @@ display_forecast() {
   jq_filter="${jq_filter} | .[0:\$max_entries]$(build_enrichment_jq_filter)"
 
   forecast_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_entries "${max_forecast_entries}" "${jq_filter}")
+
+  # Output raw machine-readable format if --raw flag is set
+  if [[ "${is_raw}" == "true" ]]; then
+    echo "${forecast_data}" | jq -r '
+      .[] |
+      (if .prob == 0 then "None"
+       elif .prob <= 20 then "Low"
+       elif .prob <= 50 then "Fair"
+       elif .prob <= 75 then "Good"
+       else "Excellent" end) as $outlook |
+      (.index | . * 100 | round / 100) as $idx |
+      "\(.time)\t\($idx)\t\(.min_lat)\t\(.prob)\t\($outlook)"
+    '
+    check_forecast_results "${forecast_data}"
+    return $?
+  fi
 
   # Display header
   echo
@@ -797,13 +842,8 @@ display_forecast() {
   echo
 
   # Return success if we have forecast data, failure if empty
-  local result_count
-  result_count=$(echo "${forecast_data}" | jq -r 'length')
-  if [[ "${result_count}" -gt 0 ]]; then
-    return 0
-  else
-    return 1
-  fi
+  check_forecast_results "${forecast_data}"
+  return $?
 }
 
 # Main execution
@@ -830,9 +870,9 @@ main() {
   check_dependencies
 
   # Parse command line arguments
-  local args_result location show_historical data_source forecast_hours hp30_column min_magnitude
+  local args_result location show_historical data_source forecast_hours hp30_column min_magnitude is_raw
   args_result=$(parse_args "$@")
-  IFS='|' read -r location show_historical data_source forecast_hours hp30_column min_magnitude <<< "${args_result}"
+  IFS='|' read -r location show_historical data_source forecast_hours hp30_column min_magnitude is_raw <<< "${args_result}"
 
   # Geocode location to coordinates
   local geo_result latitude longitude location_name
@@ -848,7 +888,7 @@ main() {
   fi
 
   # Display forecast results
-  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}" "${hp30_column}" "${min_magnitude}"
+  display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}" "${hp30_column}" "${min_magnitude}" "${is_raw}"
   local has_results=$?
 
   if [[ ${has_results} -eq 0 ]]; then
