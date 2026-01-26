@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.7.2"
+readonly SCRIPT_VERSION="0.8.0"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -25,6 +25,39 @@ readonly HTTP_TIMEOUT=30
 readonly DEFAULT_FORECAST_HOURS=24
 readonly MAX_HISTORICAL_ENTRIES=16
 readonly PROBABILITY_INCREMENT_PER_DEGREE=20
+
+# Success Exit Codes
+readonly EXIT_SUCCESS=0
+readonly EXIT_NO_RESULTS=1
+
+# Error Exit Codes
+readonly EXIT_INCOMPATIBLE_SHELL=10
+readonly EXIT_MISSING_DEPENDENCY=11
+readonly EXIT_INVALID_ARGUMENT_SYNTAX=20
+readonly EXIT_MISSING_REQUIRED_ARGUMENT=21
+readonly EXIT_INVALID_ARGUMENT_VALUE=22
+readonly EXIT_INCOMPATIBLE_OPTIONS=23
+readonly EXIT_NETWORK_CONNECTIVITY=30
+readonly EXIT_API_TIMEOUT=31
+readonly EXIT_API_UNAVAILABLE=32
+readonly EXIT_API_RATE_LIMIT=33
+readonly EXIT_GEOCODING_FAILURE=34
+readonly EXIT_DATA_VALIDATION_ERROR=40
+readonly EXIT_EMPTY_API_RESPONSE=41
+readonly EXIT_DATA_PARSING_ERROR=42
+readonly EXIT_UNHANDLED_ERROR=99
+
+# Validate shell environment
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "Error: This script requires Bash. Please run with 'bash aurora.sh' or make it executable." >&2
+  exit "${EXIT_INCOMPATIBLE_SHELL}"
+fi
+
+# Validate bash version (require 3.2+)
+if [ "${BASH_VERSINFO[0]}" -lt 3 ] || { [ "${BASH_VERSINFO[0]}" -eq 3 ] && [ "${BASH_VERSINFO[1]}" -lt 2 ]; }; then
+  echo "Error: This script requires Bash 3.2 or higher. You have ${BASH_VERSION}." >&2
+  exit "${EXIT_INCOMPATIBLE_SHELL}"
+fi
 
 # Color codes (disabled if not in TTY)
 if [[ -t 1 ]]; then
@@ -211,8 +244,8 @@ EOF
 
 # Error handling
 error_exit() {
-  local message="$1"
-  local exit_code="${2:-1}"
+  local exit_code="${1:-${EXIT_UNHANDLED_ERROR}}"
+  local message="$2"
   echo -e "${COLOR_RED}Error:${COLOR_RESET} ${message}" >&2
   exit ${exit_code}
 }
@@ -227,18 +260,17 @@ info() {
 check_dependencies() {
   # Only check for jq - all other tools (curl, awk, bc, column) are standard utilities
   if ! command -v jq &>/dev/null; then
-    error_exit "Missing required dependency: jq\n\nPlease install it using your package manager:\n  macOS:   brew install jq\n  Ubuntu:  sudo apt install jq\n  Fedora:  sudo dnf install jq"
+    error_exit "${EXIT_MISSING_DEPENDENCY}" "Missing required dependency: jq\n\nPlease install it using your package manager:\n  macOS:   brew install jq\n  Ubuntu:  sudo apt install jq\n  Fedora:  sudo dnf install jq"
   fi
 }
-
 # Validate hours parameter
 validate_hours() {
   local hours="$1"
   if [[ ! ${hours} =~ ^[0-9]+$ ]]; then
-    error_exit "Invalid hours value: ${hours}. Must be a positive integer."
+    error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Invalid hours value: ${hours}. Must be a positive integer."
   fi
   if ((hours < 1 || hours > 72)); then
-    error_exit "Hours must be between 1 and 72. Got: ${hours}"
+    error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Hours must be between 1 and 72. Got: ${hours}"
   fi
 }
 
@@ -255,7 +287,7 @@ parse_args() {
   # Handle no arguments
   if [[ $# -eq 0 ]]; then
     show_usage
-    exit 1
+    exit "${EXIT_MISSING_REQUIRED_ARGUMENT}"
   fi
 
   # Parse arguments
@@ -294,7 +326,7 @@ parse_args() {
           estimate_value="$1"
           shift
         else
-          error_exit "Option ${1} requires an argument."
+          error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Option ${1} requires an argument."
         fi
         case "${estimate_value}" in
           median)
@@ -307,7 +339,7 @@ parse_args() {
             hp30_column="6"
             ;;
           *)
-            error_exit "Invalid estimate value: ${estimate_value}. Must be one of: median, low, high"
+            error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Invalid estimate value: ${estimate_value}. Must be one of: median, low, high"
             ;;
         esac
         ;;
@@ -326,7 +358,7 @@ parse_args() {
           forecast_hours="$1"
           shift
         else
-          error_exit "Option ${1} requires an argument."
+          error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Option ${1} requires an argument."
         fi
         validate_hours "${forecast_hours}"
         ;;
@@ -341,21 +373,21 @@ parse_args() {
           min_magnitude="$1"
           shift
         else
-          error_exit "Option ${1} requires an argument."
+          error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Option ${1} requires an argument."
         fi
         # Validate magnitude value
         if [[ ! ${min_magnitude} =~ ^[0-9]+$ ]] || ((min_magnitude < 0)); then
-          error_exit "Invalid magnitude value: ${min_magnitude}. Must be >= 0."
+          error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Invalid magnitude value: ${min_magnitude}. Must be >= 0."
         fi
         ;;
       -*)
-        error_exit "Unknown option: $1\n\nRun '${SCRIPT_NAME} --help' for usage information."
+        error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Unknown option: $1\n\nRun '${SCRIPT_NAME} --help' for usage information."
         ;;
       *)
         if [[ -z "${location}" ]]; then
           location="$1"
         else
-          error_exit "Multiple locations specified. Please provide only one location."
+          error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Multiple locations specified. Please provide only one location."
         fi
         shift
         ;;
@@ -364,19 +396,52 @@ parse_args() {
 
   # Validate required arguments
   if [[ -z "${location}" ]]; then
-    error_exit "Location is required.\n\nRun '${SCRIPT_NAME} --help' for usage information."
+    error_exit "${EXIT_MISSING_REQUIRED_ARGUMENT}" "Location is required.\n\nRun '${SCRIPT_NAME} --help' for usage information."
   fi
 
   # Validate incompatible options
   if [[ "${show_historical}" == "true" && "${data_source}" == "GFZ" ]]; then
-    error_exit "Historical data (--hist) is only available with NOAA data source (--Kp or --NOAA)."
+    error_exit "${EXIT_INCOMPATIBLE_OPTIONS}" "Historical data (--hist) is only available with NOAA data source (--Kp or --NOAA)."
   fi
 
   if [[ "${estimate_used}" == "true" && "${data_source}" == "NOAA" ]]; then
-    error_exit "The --estimate option is only available with GFZ data source (--Hp30 or --GFZ)."
+    error_exit "${EXIT_INCOMPATIBLE_OPTIONS}" "The --estimate option is only available with GFZ data source (--Hp30 or --GFZ)."
   fi
 
   echo "${location}|${show_historical}|${data_source}|${forecast_hours}|${hp30_column}|${min_magnitude}"
+}
+
+# Handle API response errors and extract response body
+# Usage: handle_api_response <response> <curl_exit_code> <service_name>
+handle_api_response() {
+  local response="$1"
+  local curl_exit="$2"
+  local service_name="$3"
+  local http_code
+  local response_body
+
+  # Extract HTTP status code from response
+  http_code=$(echo "${response}" | tail -n1)
+  response_body=$(echo "${response}" | sed '$d')
+
+  # Handle curl errors
+  if [[ ${curl_exit} -eq 28 ]]; then
+    error_exit "${EXIT_API_TIMEOUT}" "Request to ${service_name} timed out after ${HTTP_TIMEOUT} seconds. Please try again."
+  elif [[ ${curl_exit} -ne 0 ]]; then
+    error_exit "${EXIT_NETWORK_CONNECTIVITY}" "Failed to connect to ${service_name}."
+  fi
+
+  # Handle HTTP status codes
+  if [[ "${http_code}" == "429" ]]; then
+    error_exit "${EXIT_API_RATE_LIMIT}" "${service_name} rate limit exceeded. Please wait a moment and try again."
+  elif [[ "${http_code}" =~ ^5 ]]; then
+    error_exit "${EXIT_API_UNAVAILABLE}" "${service_name} is temporarily unavailable (HTTP ${http_code}). Please try again later."
+  elif [[ "${http_code}" != "200" ]] && [[ -n "${http_code}" ]]; then
+    error_exit "${EXIT_NETWORK_CONNECTIVITY}" "${service_name} returned error (HTTP ${http_code})."
+  fi
+
+  # Return cleaned response body
+  echo "${response_body}"
 }
 
 # Geocode location to coordinates
@@ -387,13 +452,18 @@ geocode_location() {
 
   info "Fetching coordinates for: ${COLOR_BOLD}${location}${COLOR_RESET}"
 
-  geo_json=$(curl -sf \
+  local response
+  response=$(curl -sf -w "\n%{http_code}" \
     -m "${HTTP_TIMEOUT}" \
     -H "User-Agent: ${USER_AGENT}" \
     --get "${API_GEOCODING}" \
     --data-urlencode "q=${location}" \
     --data "format=json" \
-    --data "limit=1") || error_exit "Failed to connect to geocoding service."
+    --data "limit=1" 2>&1)
+  local curl_exit=$?
+
+  # Handle API response and extract body
+  geo_json=$(handle_api_response "${response}" "${curl_exit}" "Geocoding service")
 
   # Parse geocoding response
   lat=$(echo "${geo_json}" | jq -r '.[0].lat // empty')
@@ -402,7 +472,7 @@ geocode_location() {
 
   # Validate geocoding results
   if [[ -z ${lat} || -z ${lon} ]]; then
-    error_exit "Location not found: ${location}\n\nTry using a more specific format:\n  • City, Country (e.g., 'Stockholm, Sweden')\n  • City, State, Country (e.g., 'Portland, Oregon, USA')"
+    error_exit "${EXIT_GEOCODING_FAILURE}" "Location not found: ${location}\n\nTry using a more specific format:\n  • City, Country (e.g., 'Stockholm, Sweden')\n  • City, State, Country (e.g., 'Portland, Oregon, USA')"
   fi
 
   # Format coordinates to 2 decimal places
@@ -416,15 +486,20 @@ geocode_location() {
 fetch_noaa_kp_forecast() {
   info "Retrieving NOAA Planetary Kp-index forecast..."
 
-  local forecast_data
-  forecast_data=$(curl -sf \
+  local response
+  response=$(curl -sf -w "\n%{http_code}" \
     -m "${HTTP_TIMEOUT}" \
     -H "User-Agent: ${USER_AGENT}" \
-    "${API_NOAA_KP}") || error_exit "Failed to fetch NOAA Kp-index forecast. Please try again later."
+    "${API_NOAA_KP}" 2>&1)
+  local curl_exit=$?
+
+  # Handle API response and extract body
+  local forecast_data
+  forecast_data=$(handle_api_response "${response}" "${curl_exit}" "NOAA API")
 
   # Validate JSON response
   if ! echo "${forecast_data}" | jq -e '.[0][0]' &>/dev/null; then
-    error_exit "Invalid response from NOAA API. Please try again later."
+    error_exit "${EXIT_DATA_VALIDATION_ERROR}" "Invalid response from NOAA API. Please try again later."
   fi
 
   echo "${forecast_data}"
@@ -435,15 +510,20 @@ fetch_gfz_hp30_forecast() {
   local column="${1:-4}"  # Default to median (column 4)
   info "Retrieving GFZ/ESA Hp30 forecast..."
 
-  local csv_data
-  csv_data=$(curl -sf \
+  local response
+  response=$(curl -sf -w "\n%{http_code}" \
     -m "${HTTP_TIMEOUT}" \
     -H "User-Agent: ${USER_AGENT}" \
-    "${API_GFZ_HP30}") || error_exit "Failed to fetch GFZ/ESA Hp30 forecast. Please try again later."
+    "${API_GFZ_HP30}" 2>&1)
+  local curl_exit=$?
+
+  # Handle API response and extract body
+  local csv_data
+  csv_data=$(handle_api_response "${response}" "${curl_exit}" "GFZ API")
 
   # Validate CSV response
   if [[ -z "${csv_data}" ]]; then
-    error_exit "Empty response from GFZ API. Please try again later."
+    error_exit "${EXIT_EMPTY_API_RESPONSE}" "Empty response from GFZ API. Please try again later."
   fi
 
   # Convert CSV to JSON format
@@ -474,7 +554,7 @@ fetch_gfz_hp30_forecast() {
 
   # Validate JSON output
   if ! echo "${json_data}" | jq -e '.[0][0]' &>/dev/null; then
-    error_exit "Failed to parse GFZ Hp30 data. Please try again later."
+    error_exit "${EXIT_DATA_PARSING_ERROR}" "Failed to parse GFZ Hp30 data. Please try again later."
   fi
 
   echo "${json_data}" | jq -c .
@@ -715,6 +795,15 @@ display_forecast() {
   echo
   echo -e "  ${COLOR_CYAN}Tip:${COLOR_RESET} Run '${SCRIPT_NAME} --explain' for detailed probability calculations"
   echo
+
+  # Return success if we have forecast data, failure if empty
+  local result_count
+  result_count=$(echo "${forecast_data}" | jq -r 'length')
+  if [[ "${result_count}" -gt 0 ]]; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 # Main execution
@@ -760,6 +849,13 @@ main() {
 
   # Display forecast results
   display_forecast "${latitude}" "${longitude}" "${location_name}" "${forecast_json}" "${show_historical}" "${data_source}" "${forecast_hours}" "${hp30_column}" "${min_magnitude}"
+  local has_results=$?
+
+  if [[ ${has_results} -eq 0 ]]; then
+    exit "${EXIT_SUCCESS}"
+  else
+    exit "${EXIT_NO_RESULTS}"
+  fi
 }
 
 # Script entry point
