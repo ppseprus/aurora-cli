@@ -1,0 +1,15 @@
+[
+  {
+    "place_id": 12345678,
+    "licence": "Data © OpenStreetMap contributors, ODbL 1.0. https://osm.org/copyright",
+    "osm_type": "relation",
+    "osm_id": 398021,
+    "boundingbox": ["59.2473", "59.4458", "17.8014", "18.2069"],
+    "lat": "59.3251172",
+    "lon": "18.0710935",
+    "display_name": "Stockholm, Stockholm County, Sweden",
+    "class": "place",
+    "type": "city",
+    "importance": 0.7654321
+  }
+]

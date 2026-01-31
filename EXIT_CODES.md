@@ -32,5 +32,3 @@ Aurora CLI uses a structured exit code system following Unix conventions. Exit c
 | 41 | Empty API response | GFZ API returned empty response |
 | 42 | Data parsing error | GFZ CSV to JSON conversion failed |
 | 99 | Unhandled error | Unexpected condition not covered by specific error codes |
-
----

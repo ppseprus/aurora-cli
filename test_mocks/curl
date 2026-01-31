@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+#
+# Mock curl for testing aurora.sh
+# Returns mock data based on URL patterns
+#
+
+# Parse arguments to find the URL
+URL=""
+WRITE_OUT=""
+for arg in "$@"; do
+  if [[ "$arg" =~ ^https?:// ]]; then
+    URL="$arg"
+  elif [[ "$arg" == -w ]]; then
+    # Next arg will be write-out format
+    WRITE_OUT="next"
+  elif [[ "$WRITE_OUT" == "next" ]]; then
+    WRITE_OUT="$arg"
+  fi
+done
+
+# Determine which mock file to return based on URL
+MOCK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Get current date in both formats for replacement
+CURRENT_DATE_YYYY_MM_DD=$(date +%Y-%m-%d)
+CURRENT_DATE_DD_MM_YYYY=$(date +%d-%m-%Y)
+
+# Helper function to output file with date replacement
+output_with_dates() {
+  local file="$1"
+  sed -e "s/YYYY-MM-DD/${CURRENT_DATE_YYYY_MM_DD}/g" \
+      -e "s/DD-MM-YYYY/${CURRENT_DATE_DD_MM_YYYY}/g" \
+      "${file}"
+}
+
+# Check for special test scenarios via environment variable
+SCENARIO="${AURORA_TEST_SCENARIO:-success}"
+
+case "$SCENARIO" in
+  geocode_api_network_error)
+    # Simulate curl network error for geocoding API only
+    if [[ "$URL" =~ nominatim ]]; then
+      exit 6
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  index_api_network_error)
+    # Simulate curl network error for index APIs only
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+      exit 0
+    else
+      exit 6
+    fi
+    ;;
+  geocode_api_timeout)
+    # Simulate curl timeout for geocoding API only
+    if [[ "$URL" =~ nominatim ]]; then
+      exit 28
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  geocode_api_rate_limit)
+    # Return 429 status code for geocoding API only
+    if [[ "$URL" =~ nominatim ]]; then
+      echo "429"
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  index_api_timeout)
+    # Simulate curl timeout for index APIs only
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+      exit 0
+    else
+      exit 28
+    fi
+    ;;
+  index_api_rate_limit)
+    # Return 429 status code for forecast APIs
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "429"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "429"
+    fi
+    exit 0
+    ;;
+  geocode_api_fail)
+    # Return 503 status code for geocoding API only
+    if [[ "$URL" =~ nominatim ]]; then
+      echo "503"
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  location_not_found)
+    # Return empty location result
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_empty.json"
+      echo "200"
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  index_api_fail)
+    # Return 503 status code for forecast APIs
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "503"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "503"
+    fi
+    exit 0
+    ;;
+  gfz_empty)
+    # Return empty GFZ data (NOAA should not return anything)
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      cat "${MOCK_DIR}/gfz_empty.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  gfz_malformed)
+    # Return malformed GFZ data (NOAA should not return anything)
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_malformed.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  noaa_invalid)
+    # Return invalid NOAA data (GFZ should not return anything)
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+    elif [[ "$URL" =~ noaa ]]; then
+      cat "${MOCK_DIR}/noaa_invalid.json"
+      echo "200"
+    fi
+    exit 0
+    ;;
+  success|*)
+    # Return successful mock data
+    if [[ "$URL" =~ nominatim ]]; then
+      cat "${MOCK_DIR}/nominatim_stockholm.json"
+      echo "200"
+    elif [[ "$URL" =~ noaa ]]; then
+      output_with_dates "${MOCK_DIR}/noaa_kp.json"
+      echo "200"
+    elif [[ "$URL" =~ gfz|spaceweather ]]; then
+      output_with_dates "${MOCK_DIR}/gfz_hp30.csv"
+      echo "200"
+    fi
+    exit 0
+    ;;
+esac
