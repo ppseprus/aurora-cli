@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="0.9.0"
+readonly SCRIPT_VERSION="0.10.0"
 
 # API Endpoints
 readonly API_GEOCODING="https://nominatim.openstreetmap.org/search"
@@ -291,6 +291,23 @@ check_forecast_results() {
   fi
 }
 
+# Parse option with value from either --option=value or --option value format
+# Usage: value=$(parse_option_with_value "$1" "$2") && shift 2 || shift 1
+parse_option_with_value() {
+  local current_arg="$1"
+  local next_arg="${2:-}"
+
+  if [[ "${current_arg}" == *=* ]]; then
+    # Handle --option=value or -o=value pattern
+    echo "${current_arg#*=}"
+  elif [[ -n "${next_arg}" ]]; then
+    # Handle --option value or -o value pattern (including negative numbers)
+    echo "${next_arg}"
+  else
+    return 1
+  fi
+}
+
 # Parse command line arguments
 parse_args() {
   local location=""
@@ -337,32 +354,22 @@ parse_args() {
         ;;
       -e|--estimate|--estimate=*|-e=*)
         estimate_used="true"
-        local estimate_value=""
-        if [[ "$1" == *=* ]]; then
-          # Handle --estimate=value or -e=value pattern
-          estimate_value="${1#*=}"
-          shift
-        elif [[ $# -gt 1 ]]; then
-          # Handle --estimate value or -e value pattern
-          shift
-          estimate_value="$1"
-          shift
+        local estimate_value
+        if estimate_value=$(parse_option_with_value "$1" "${2:-}"); then
+          if [[ "$1" == *=* ]]; then
+            shift
+          else
+            shift 2
+          fi
         else
           error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Option ${1} requires an argument."
         fi
+
         case "${estimate_value}" in
-          median)
-            hp30_column="4"
-            ;;
-          low)
-            hp30_column="2"
-            ;;
-          high)
-            hp30_column="6"
-            ;;
-          *)
-            error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Invalid estimate value: ${estimate_value}. Must be one of: median, low, high"
-            ;;
+          median) hp30_column="4" ;;
+          low) hp30_column="2" ;;
+          high) hp30_column="6" ;;
+          *) error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Invalid estimate value: ${estimate_value}. Must be one of: median, low, high" ;;
         esac
         ;;
       --hist)
@@ -370,34 +377,28 @@ parse_args() {
         shift
         ;;
       -f|--forecast|--forecast=*|-f=*)
-        if [[ "$1" == *=* ]]; then
-          # Handle --forecast=hours or -f=hours pattern
-          forecast_hours="${1#*=}"
-          shift
-        elif [[ $# -gt 1 ]]; then
-          # Handle --forecast hours or -f hours pattern
-          shift
-          forecast_hours="$1"
-          shift
+        if forecast_hours=$(parse_option_with_value "$1" "${2:-}"); then
+          if [[ "$1" == *=* ]]; then
+            shift
+          else
+            shift 2
+          fi
         else
           error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Option ${1} requires an argument."
         fi
         validate_hours "${forecast_hours}"
         ;;
       -m|--magnitude|--magnitude=*|-m=*)
-        if [[ "$1" == *=* ]]; then
-          # Handle --magnitude=value or -m=value pattern
-          min_magnitude="${1#*=}"
-          shift
-        elif [[ $# -gt 1 ]]; then
-          # Handle --magnitude value or -m value pattern
-          shift
-          min_magnitude="$1"
-          shift
+        if min_magnitude=$(parse_option_with_value "$1" "${2:-}"); then
+          if [[ "$1" == *=* ]]; then
+            shift
+          else
+            shift 2
+          fi
         else
           error_exit "${EXIT_INVALID_ARGUMENT_SYNTAX}" "Option ${1} requires an argument."
         fi
-        # Validate magnitude value
+
         if [[ ! ${min_magnitude} =~ ^[0-9]+$ ]] || ((min_magnitude < 0)); then
           error_exit "${EXIT_INVALID_ARGUMENT_VALUE}" "Invalid magnitude value: ${min_magnitude}. Must be >= 0."
         fi
@@ -466,6 +467,24 @@ handle_api_response() {
   echo "${response_body}"
 }
 
+# Make HTTP GET request with error handling
+# Usage: make_http_request <url> <service_name> [additional_curl_args...]
+make_http_request() {
+  local url="$1"
+  local service_name="$2"
+  shift 2
+
+  local response
+  response=$(curl -sf -w "\n%{http_code}" \
+    -m "${HTTP_TIMEOUT}" \
+    -H "User-Agent: ${USER_AGENT}" \
+    "$@" \
+    "${url}" 2>&1)
+  local curl_exit=$?
+
+  handle_api_response "${response}" "${curl_exit}" "${service_name}"
+}
+
 # Geocode location to coordinates
 geocode_location() {
   local location="$1"
@@ -476,18 +495,12 @@ geocode_location() {
     info "Fetching coordinates for: ${COLOR_BOLD}${location}${COLOR_RESET}"
   fi
 
-  local response
-  response=$(curl -sf -w "\n%{http_code}" \
-    -m "${HTTP_TIMEOUT}" \
-    -H "User-Agent: ${USER_AGENT}" \
-    --get "${API_GEOCODING}" \
+  # Make HTTP request using helper
+  geo_json=$(make_http_request "${API_GEOCODING}" "Geocoding service" \
+    --get \
     --data-urlencode "q=${location}" \
     --data "format=json" \
-    --data "limit=1" 2>&1)
-  local curl_exit=$?
-
-  # Handle API response and extract body
-  geo_json=$(handle_api_response "${response}" "${curl_exit}" "Geocoding service")
+    --data "limit=1")
 
   # Parse geocoding response
   lat=$(echo "${geo_json}" | jq -r '.[0].lat // empty')
@@ -512,16 +525,9 @@ fetch_noaa_kp_forecast() {
     info "Retrieving NOAA Planetary Kp-index forecast..."
   fi
 
-  local response
-  response=$(curl -sf -w "\n%{http_code}" \
-    -m "${HTTP_TIMEOUT}" \
-    -H "User-Agent: ${USER_AGENT}" \
-    "${API_NOAA_KP}" 2>&1)
-  local curl_exit=$?
-
-  # Handle API response and extract body
+  # Make HTTP request using helper
   local forecast_data
-  forecast_data=$(handle_api_response "${response}" "${curl_exit}" "NOAA API")
+  forecast_data=$(make_http_request "${API_NOAA_KP}" "NOAA API")
 
   # Validate JSON response
   if ! echo "${forecast_data}" | jq -e '.[0][0]' &>/dev/null; then
@@ -538,16 +544,9 @@ fetch_gfz_hp30_forecast() {
     info "Retrieving GFZ/ESA Hp30 forecast..."
   fi
 
-  local response
-  response=$(curl -sf -w "\n%{http_code}" \
-    -m "${HTTP_TIMEOUT}" \
-    -H "User-Agent: ${USER_AGENT}" \
-    "${API_GFZ_HP30}" 2>&1)
-  local curl_exit=$?
-
-  # Handle API response and extract body
+  # Make HTTP request using helper
   local csv_data
-  csv_data=$(handle_api_response "${response}" "${curl_exit}" "GFZ API")
+  csv_data=$(make_http_request "${API_GFZ_HP30}" "GFZ API")
 
   # Validate CSV response
   if [[ -z "${csv_data}" ]]; then
@@ -588,67 +587,14 @@ fetch_gfz_hp30_forecast() {
   echo "${json_data}" | jq -c .
 }
 
-# Map geomagnetic index to minimum latitude for aurora visibility
-# Uses rounded index value to determine latitude threshold
-get_minimum_latitude() {
-  local index_value="$1"
-  local rounded_index
+# Define reusable jq helper functions
+readonly JQ_HELPER_FUNCTIONS='def get_outlook: if . == 0 then "None" elif . <= 20 then "Low" elif . <= 50 then "Fair" elif . <= 75 then "Good" else "Excellent" end; def pad_number: (. | tostring) as $s | if . < 10 then " " + $s else $s end;'
 
-  # Round to nearest integer using bc for precision
-  rounded_index=$(printf "%.0f" "${index_value}")
-
-  # Map index to minimum latitude based on scientific data
-  case "${rounded_index}" in
-    0) echo "67" ;;
-    1) echo "66" ;;
-    2) echo "65" ;;
-    3) echo "64" ;;
-    4) echo "62" ;;
-    5) echo "60" ;;
-    6) echo "57" ;;
-    7) echo "54" ;;
-    8) echo "51" ;;
-    *) echo "48" ;;  # 9 and above
-  esac
-}
-
-# Calculate aurora visibility probability based on latitude and index
-calculate_visibility_probability() {
-  local latitude="$1"
-  local min_latitude="$2"
-  local probability
-
-  # Use absolute value of latitude (works for both hemispheres)
-  latitude=$(awk -v lat="${latitude}" 'BEGIN {print (lat < 0) ? -lat : lat}')
-
-  # Calculate latitude difference and probability using awk for floating point
-  probability=$(awk -v lat="${latitude}" -v min_lat="${min_latitude}" -v incr="${PROBABILITY_INCREMENT_PER_DEGREE}" '
-    BEGIN {
-      diff = lat - min_lat
-      prob = int(diff * incr)
-      if (prob < 0) prob = 0
-      else if (prob > 100) prob = 100
-      print prob
-    }
-  ')
-
-  echo "${probability}"
-}
-
-# Get outlook category based on probability
-get_outlook_category() {
-  local probability="$1"
-
-  if ((probability == 0)); then
-    echo "None"
-  elif ((probability <= 20)); then
-    echo "Low"
-  elif ((probability <= 50)); then
-    echo "Fair"
-  elif ((probability <= 75)); then
-    echo "Good"
-  else
-    echo "Excellent"
+# Build jq filter to apply magnitude filtering
+build_magnitude_filter() {
+  local min_magnitude="$1"
+  if [[ -n ${min_magnitude} ]] && ((min_magnitude > 0)); then
+    echo " | map(select(.index >= ${min_magnitude}))"
   fi
 }
 
@@ -727,46 +673,30 @@ display_forecast() {
     max_forecast_entries=$(((forecast_hours + 2) / 3))
   fi
 
+  # Use shared jq helper functions
+  local jq_functions="${JQ_HELPER_FUNCTIONS}"
+
+  # Build shared magnitude filter
+  local magnitude_filter
+  magnitude_filter=$(build_magnitude_filter "${min_magnitude}")
+
   # Process historical data if requested
   local historical_data=""
   if [[ ${show_historical} == "true" ]]; then
-    local hist_jq_filter='.[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time < $now))'
-
-    # Apply magnitude filter if specified (> 0)
-    if [[ -n ${min_magnitude} ]] && ((min_magnitude > 0)); then
-      hist_jq_filter="${hist_jq_filter} | map(select(.index >= ${min_magnitude}))"
-    fi
-
-    hist_jq_filter="${hist_jq_filter} | sort_by(.time) | .[-\$max_hist:]$(build_enrichment_jq_filter)"
-
+    local hist_jq_filter
+    hist_jq_filter="${jq_functions} .[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time < \$now))${magnitude_filter} | sort_by(.time) | .[-\$max_hist:]$(build_enrichment_jq_filter)"
     historical_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_hist "${MAX_HISTORICAL_ENTRIES}" "${hist_jq_filter}")
   fi
 
   # Process forecast data
   local forecast_data
-  local jq_filter='.[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time >= $now))'
-
-  # Apply magnitude filter if specified (> 0)
-  if [[ -n ${min_magnitude} ]] && ((min_magnitude > 0)); then
-    jq_filter="${jq_filter} | map(select(.index >= ${min_magnitude}))"
-  fi
-
-  jq_filter="${jq_filter} | .[0:\$max_entries]$(build_enrichment_jq_filter)"
-
+  local jq_filter
+  jq_filter="${jq_functions} .[1:] | map({time: .[0], index: (.[1] | tonumber)}) | map(select(.time >= \$now))${magnitude_filter} | .[0:\$max_entries]$(build_enrichment_jq_filter)"
   forecast_data=$(echo "${forecast_json}" | jq -r --arg lat "${latitude}" --arg now "${current_utc_time}" --argjson max_entries "${max_forecast_entries}" "${jq_filter}")
 
   # Output raw machine-readable format if --raw flag is set
   if [[ "${is_raw}" == "true" ]]; then
-    echo "${forecast_data}" | jq -r '
-      .[] |
-      (if .prob == 0 then "None"
-       elif .prob <= 20 then "Low"
-       elif .prob <= 50 then "Fair"
-       elif .prob <= 75 then "Good"
-       else "Excellent" end) as $outlook |
-      (.index | . * 100 | round / 100) as $idx |
-      "\(.time)\t\($idx)\t\(.min_lat)\t\(.prob)\t\($outlook)"
-    '
+    echo "${forecast_data}" | jq -r "${JQ_HELPER_FUNCTIONS} .[] | (.index | . * 100 | round / 100) as \$idx | \"\(.time)\\t\(\$idx)\\t\(.min_lat)\\t\(.prob)\\t\(.prob | get_outlook)\""
     check_forecast_results "${forecast_data}"
     return $?
   fi
@@ -774,7 +704,8 @@ display_forecast() {
   # Display header
   echo
   echo -e "${COLOR_BOLD}  AURORA VISIBILITY FORECAST${COLOR_RESET}"
-  echo -e "${COLOR_BOLD}================================================================================${COLOR_RESET}"
+  #echo -e "${COLOR_BOLD}================================================================================${COLOR_RESET}"
+  echo -e "${COLOR_BOLD}========================================================${COLOR_RESET}"
   echo
   echo -e "  ${COLOR_CYAN}Location:${COLOR_RESET}      ${location_name}"
   echo -e "  ${COLOR_CYAN}Coordinates:${COLOR_RESET}   ${latitude}°, ${longitude}°"
@@ -785,7 +716,7 @@ display_forecast() {
   echo -e "  ${COLOR_CYAN}Magnitude:${COLOR_RESET}     ≥${min_magnitude}"
   echo -e "  ${COLOR_CYAN}Forecast Time:${COLOR_RESET} ${current_utc_time} UTC"
   echo
-  echo -e "  ${COLOR_BOLD}Note:${COLOR_RESET} Each degree above minimum latitude adds ~${PROBABILITY_INCREMENT_PER_DEGREE}% visibility probability"
+  echo -e "  ${COLOR_BOLD}Note:${COLOR_RESET} Each degree above minimum latitude adds ~${PROBABILITY_INCREMENT_PER_DEGREE}%\n   visibility probability."
   echo
 
   # Display forecast table
@@ -795,41 +726,13 @@ display_forecast() {
 
     # Show historical data if available
     if [[ ${show_historical} == "true" && -n ${historical_data} ]]; then
-      echo "${historical_data}" | jq -r '
-        .[] |
-        (if .prob == 0 then "None"
-         elif .prob <= 20 then "Low"
-         elif .prob <= 50 then "Fair"
-         elif .prob <= 75 then "Good"
-         else "Excellent" end) as $outlook |
-        (.index | . * 100 | round / 100) as $idx |
-        (if $idx < 10 then " " + ($idx | tostring) else ($idx | tostring) end) as $padded_idx |
-        (.prob | tostring) as $prob_str |
-        (if .prob < 10 then "  " + $prob_str elif .prob < 100 then " " + $prob_str else $prob_str end) as $padded_prob |
-        (.min_lat | tostring) as $lat_str |
-        (if .min_lat < 10 then " " + $lat_str else $lat_str end) as $padded_lat |
-        "\(.time)\t\($padded_idx)\t≥\($padded_lat)°\t\($padded_prob)%\t\($outlook)"
-      '
+      echo "${historical_data}" | jq -r "${JQ_HELPER_FUNCTIONS} .[] | (.index | . * 100 | round / 100) as \$idx | (if \$idx < 10 then \" \" + (\$idx | tostring) else (\$idx | tostring) end) as \$padded_idx | (.prob | tostring) as \$prob_str | (if .prob < 10 then \"  \" + \$prob_str elif .prob < 100 then \" \" + \$prob_str else \$prob_str end) as \$padded_prob | \"\(.time)\\t\(\$padded_idx)\\t≥\(.min_lat | pad_number)°\\t\(\$padded_prob)%\\t\(.prob | get_outlook)\""
       # Separator between historical and forecast
       echo -e "━━━━━ PRESENT ━━━━━\t\t\t\t"
     fi
 
     # Show forecast data
-    echo "${forecast_data}" | jq -r '
-      .[] |
-      (if .prob == 0 then "None"
-       elif .prob <= 20 then "Low"
-       elif .prob <= 50 then "Fair"
-       elif .prob <= 75 then "Good"
-       else "Excellent" end) as $outlook |
-      (.index | . * 100 | round / 100) as $idx |
-      (if $idx < 10 then " " + ($idx | tostring) else ($idx | tostring) end) as $padded_idx |
-      (.prob | tostring) as $prob_str |
-      (if .prob < 10 then "  " + $prob_str elif .prob < 100 then " " + $prob_str else $prob_str end) as $padded_prob |
-      (.min_lat | tostring) as $lat_str |
-      (if .min_lat < 10 then " " + $lat_str else $lat_str end) as $padded_lat |
-      "\(.time)\t\($padded_idx)\t≥\($padded_lat)°\t\($padded_prob)%\t\($outlook)"
-    '
+    echo "${forecast_data}" | jq -r "${JQ_HELPER_FUNCTIONS} .[] | (.index | . * 100 | round / 100) as \$idx | (if \$idx < 10 then \" \" + (\$idx | tostring) else (\$idx | tostring) end) as \$padded_idx | (.prob | tostring) as \$prob_str | (if .prob < 10 then \"  \" + \$prob_str elif .prob < 100 then \" \" + \$prob_str else \$prob_str end) as \$padded_prob | \"\(.time)\\t\(\$padded_idx)\\t≥\(.min_lat | pad_number)°\\t\(\$padded_prob)%\\t\(.prob | get_outlook)\""
   } | column -t -s $'\t' \
     | awk -v bold="${COLOR_BOLD}" -v reset="${COLOR_RESET}" '
       NR == 1 { print bold $0 reset; next }
@@ -838,7 +741,7 @@ display_forecast() {
     '
 
   echo
-  echo -e "  ${COLOR_CYAN}Tip:${COLOR_RESET} Run '${SCRIPT_NAME} --explain' for detailed probability calculations"
+  echo -e "  ${COLOR_CYAN}Tip:${COLOR_RESET} Run '${SCRIPT_NAME} --explain' for detailed\n   probability calculations."
   echo
 
   # Return success if we have forecast data, failure if empty
